@@ -46,7 +46,7 @@ argument_specs:
       - unprivileged user. The gate asserts `test -w`.
       - ''
       - GO TEMPLATING IS SAFE HERE, exactly as in config_alerts. Loki alert annotations
-      - use Go template syntax ({{ $labels.service_name }}), which shares Jinja's
+      - use Go template syntax (double-brace $labels.service_name), which shares Jinja's
       - delimiters and is a Jinja syntax error. This role builds the file with the
       - '`to_nice_yaml` filter from plain Ansible data and writes it with `copy: content=`,'
       - so rule text is never rendered as a template and Go expressions arrive verbatim.

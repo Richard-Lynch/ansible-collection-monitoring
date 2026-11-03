@@ -9,6 +9,20 @@ All notable changes to this collection are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the collection
 uses [Semantic Versioning](https://semver.org/).
 
+## [1.0.2] — 2026-11-03
+
+### Fixed
+
+- Argument spec descriptions no longer contain template delimiters that break
+  `validate_argument_spec`. `service_alert_manager`'s spec carried a literal unbalanced double
+  brace in one option's description, so every play using the role failed validation before its
+  first task ("Syntax error in template"); `config_alerts` and `config_log_alerts` carried
+  balanced ones in their entrypoint descriptions. All three now describe the delimiters in words.
+
+### Changed
+
+- The CI, release and disclose callers use ansible-devkit `v0.2.2`.
+
 ## [1.0.1] — 2026-11-03
 
 The first release published to Galaxy; 1.0.0 exists only as the git tag `v1.0.0`.
