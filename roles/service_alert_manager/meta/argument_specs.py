@@ -89,7 +89,8 @@ argument_specs = ArgumentSpecs(
                     required=False,
                     description=[
                         "Last line of every notification body (e.g. where to start investigating).",
-                        "Plain text inside a Go template, so it must not contain `{{`. Empty = none.",
+                        "Plain text inside a Go template, so it must not contain Go template delimiters",
+                        "(double braces). Empty = none.",
                     ],
                 ),
                 # --- dead-man heartbeat (external watchdog) ---

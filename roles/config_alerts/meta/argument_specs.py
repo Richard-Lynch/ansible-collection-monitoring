@@ -28,7 +28,7 @@ argument_specs = ArgumentSpecs(
                 "without colliding (promtool accepts it).",
                 "",
                 "GO TEMPLATING IS SAFE HERE. Prometheus annotations use Go template syntax",
-                "({{ $labels.node }}), which shares Jinja's delimiters and is a Jinja syntax error.",
+                "(double-brace $labels.node), which shares Jinja's delimiters and is a Jinja syntax error.",
                 "This role builds the file with the `to_nice_yaml` filter from plain Ansible data",
                 "and writes it with `copy: content=`, so rule text is never rendered as a template.",
                 "Callers write Go expressions as ordinary strings and they arrive verbatim. Naming",
