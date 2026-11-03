@@ -1,0 +1,10 @@
+---
+galaxy_info:
+  author: Richard Lynch
+  description: >-
+    Deploy Prometheus (retention-capped) as a Docker Compose service on the shared monitoring
+    network.
+  license: GPL-3.0-or-later
+  min_ansible_version: "2.19"
+  galaxy_tags: [prometheus, metrics, monitoring, docker]
+dependencies: []

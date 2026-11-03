@@ -29,6 +29,7 @@ roles/config_alerts/README.md
 roles/config_alerts/defaults/main.yml
 roles/config_alerts/meta/argument_specs.py
 roles/config_alerts/meta/argument_specs.yml
+roles/config_alerts/meta/main.yml
 roles/config_alerts/molecule/default/converge.yml
 roles/config_alerts/molecule/default/molecule.yml
 roles/config_alerts/molecule/default/verify.yml
@@ -38,6 +39,7 @@ roles/config_log_alerts/README.md
 roles/config_log_alerts/defaults/main.yml
 roles/config_log_alerts/meta/argument_specs.py
 roles/config_log_alerts/meta/argument_specs.yml
+roles/config_log_alerts/meta/main.yml
 roles/config_log_alerts/molecule/default/converge.yml
 roles/config_log_alerts/molecule/default/molecule.yml
 roles/config_log_alerts/molecule/default/verify.yml
@@ -49,6 +51,7 @@ roles/config_log_backfill/files/loki_backfill.py
 roles/config_log_backfill/files/test_repair_scope.py
 roles/config_log_backfill/meta/argument_specs.py
 roles/config_log_backfill/meta/argument_specs.yml
+roles/config_log_backfill/meta/main.yml
 roles/config_log_backfill/molecule/default/converge.yml
 roles/config_log_backfill/molecule/default/fake_loki.py
 roles/config_log_backfill/molecule/default/molecule.yml
@@ -60,6 +63,7 @@ roles/config_logs/defaults/main.yml
 roles/config_logs/handlers/main.yml
 roles/config_logs/meta/argument_specs.py
 roles/config_logs/meta/argument_specs.yml
+roles/config_logs/meta/main.yml
 roles/config_logs/molecule/default/converge.yml
 roles/config_logs/molecule/default/molecule.yml
 roles/config_logs/molecule/default/verify.yml
@@ -72,6 +76,7 @@ roles/config_metrics/README.md
 roles/config_metrics/defaults/main.yml
 roles/config_metrics/meta/argument_specs.py
 roles/config_metrics/meta/argument_specs.yml
+roles/config_metrics/meta/main.yml
 roles/config_metrics/molecule/default/converge.yml
 roles/config_metrics/molecule/default/molecule.yml
 roles/config_metrics/molecule/default/verify.yml
@@ -100,6 +105,7 @@ roles/service_alloy/defaults/uninstall.yml
 roles/service_alloy/handlers/main.yml
 roles/service_alloy/meta/argument_specs.py
 roles/service_alloy/meta/argument_specs.yml
+roles/service_alloy/meta/main.yml
 roles/service_alloy/molecule/default/converge.yml
 roles/service_alloy/molecule/default/molecule.yml
 roles/service_alloy/molecule/default/verify.yml
@@ -138,6 +144,7 @@ roles/service_grafana/files/provisioning/dashboards/dashboards.yml.j2
 roles/service_grafana/files/provisioning/datasources/datasources.yml
 roles/service_grafana/meta/argument_specs.py
 roles/service_grafana/meta/argument_specs.yml
+roles/service_grafana/meta/main.yml
 roles/service_grafana/molecule/default/converge.yml
 roles/service_grafana/molecule/default/molecule.yml
 roles/service_grafana/molecule/default/verify.yml
@@ -172,6 +179,7 @@ roles/service_loki/files/config/loki-config.yml.j2
 roles/service_loki/files/docker-compose.yml.j2
 roles/service_loki/meta/argument_specs.py
 roles/service_loki/meta/argument_specs.yml
+roles/service_loki/meta/main.yml
 roles/service_loki/molecule/default/converge.yml
 roles/service_loki/molecule/default/molecule.yml
 roles/service_loki/molecule/default/verify.yml
@@ -179,9 +187,11 @@ roles/service_loki/tasks/_resolve_defaults.yml
 roles/service_loki/tasks/main.yml
 roles/service_loki/tasks/setup_vars.yml
 roles/service_loki/vars/main.yml
+roles/service_node_exporter/README.md
 roles/service_node_exporter/defaults/main.yml
 roles/service_node_exporter/files/docker-compose.yml.j2
 roles/service_node_exporter/meta/argspec.TODO
+roles/service_node_exporter/meta/main.yml
 roles/service_node_exporter/tasks/binary.yml
 roles/service_node_exporter/tasks/docker.yml
 roles/service_node_exporter/tasks/main.yml
@@ -191,6 +201,7 @@ roles/service_prometheus/files/config/prometheus.yml.j2
 roles/service_prometheus/files/docker-compose.yml.j2
 roles/service_prometheus/meta/argument_specs.py
 roles/service_prometheus/meta/argument_specs.yml
+roles/service_prometheus/meta/main.yml
 roles/service_prometheus/molecule/default/converge.yml
 roles/service_prometheus/molecule/default/molecule.yml
 roles/service_prometheus/molecule/default/verify.yml
