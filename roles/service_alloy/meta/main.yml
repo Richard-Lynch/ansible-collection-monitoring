@@ -1,0 +1,15 @@
+---
+galaxy_info:
+  author: Richard Lynch
+  description: >-
+    Install Grafana Alloy as a host agent (package and systemd, or the verified release binary on an
+    image-based host) that ships the host's metrics to Prometheus and its logs to Loki.
+  license: GPL-3.0-or-later
+  min_ansible_version: "2.19"
+  platforms:
+    - name: Debian
+      versions: [bookworm]
+    - name: Ubuntu
+      versions: [noble]
+  galaxy_tags: [alloy, grafana, observability, monitoring]
+dependencies: []

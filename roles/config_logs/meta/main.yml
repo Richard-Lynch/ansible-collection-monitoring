@@ -1,0 +1,10 @@
+---
+galaxy_info:
+  author: Richard Lynch
+  description: >-
+    Register one owner's custom log sources as a Grafana Alloy drop-in config file. A mechanism: the
+    sources belong to the caller.
+  license: GPL-3.0-or-later
+  min_ansible_version: "2.19"
+  galaxy_tags: [alloy, loki, logging]
+dependencies: []

@@ -1,0 +1,16 @@
+---
+galaxy_info:
+  author: Richard Lynch
+  description: >-
+    Install Prometheus node_exporter as a Docker Compose service or as a pinned release binary under
+    systemd, optionally with the textfile collector; binary mode confirms the exporter serves
+    metrics.
+  license: GPL-3.0-or-later
+  min_ansible_version: "2.19"
+  platforms:
+    - name: Debian
+      versions: [bookworm]
+    - name: Ubuntu
+      versions: [noble]
+  galaxy_tags: [prometheus, nodeexporter, metrics, monitoring]
+dependencies: []
