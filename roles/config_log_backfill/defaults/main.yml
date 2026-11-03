@@ -1,0 +1,104 @@
+---
+# AUTO-GENERATED defaults file — DO NOT EDIT.
+#
+# Source of truth: roles/config_log_backfill/meta/argument_specs.py
+# Regenerate:      venv/bin/python tools/argspec/cli.py x generate config_log_backfill
+#
+# Edits here are silently overwritten on the next generation. To change a value or its
+# documentation, change the OptionSpec in the source file above — descriptions there
+# are emitted as the comments in this file.
+# Entrypoint:      main
+
+# 'backfill' plans (and with config_log_backfill_apply=true, pushes then
+# verifies). 'verify' only compares the files on disk with what Loki returns
+# for the same window, and never pushes.
+# 'repair_seam' finds backfilled entries whose exact text Alloy ALSO
+# shipped near the seam and reports them; with config_log_backfill_apply=true
+# it sends one Loki delete request per affected SECOND, scoped to the
+# backfill stream's own selector, and only for a second in which every
+# backfilled entry is such a copy. See the README's "The seam".
+config_log_backfill_action__default: backfill
+
+# Actually push. Off by default: the plan is the review step, and it is
+# cheap — it reads the files and queries Loki, nothing more.
+config_log_backfill_apply__default: false
+
+# How far back to go (Go-style duration). CLAMPED to Loki's
+# reject_old_samples_max_age minus config_log_backfill_max_age_margin, read
+# from the running Loki — a line older than that is rejected with HTTP 400,
+# and the report says when the clamp applied and how many lines it cost.
+config_log_backfill_since__default: 7d
+
+# Safety margin inside reject_old_samples_max_age, so the oldest lines are
+# not rejected by the time the push (and its retries) reaches them.
+config_log_backfill_max_age_margin__default: 30m
+
+# 'auto': per stream, end where the LIVE stream (live_selector's labels with
+# no backfill label) begins inside the window — at the exact record whose
+# first line equals Loki's earliest live line, else at that line's time; a
+# stream with no live lines runs to now. Otherwise an ISO-8601 timestamp
+# with offset, applied to every stream.
+config_log_backfill_end__default: auto
+
+# Name of the label that separates backfilled streams from live ones.
+config_log_backfill_label__default: backfill
+
+# Credential-shaped patterns replaced with '<redacted>' before anything
+# leaves the host (the (?P<secret>) group is what is replaced, so the key
+# stays readable). Applied to every source; the report counts hits per
+# pattern per file so a hit is visible rather than silent. Deterministic,
+# so redaction does not break idempotency.
+config_log_backfill_redact__default:
+  - name: key=value credential
+    regex: (?i)\b(?:access_?token|refresh_?token|webapi_?token|auth_?token|api_?key|apikey|password|passwd|secret|client_secret|steamLoginSecure|sessionid)\b[\"']?\s*[:=]\s*[\"']?(?P<secret>[^\s\"'&,;]{6,})
+  - name: bearer header
+    regex: (?i)\bbearer\s+(?P<secret>[A-Za-z0-9._~+/=-]{12,})
+  - name: JWT
+    regex: (?P<secret>eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,})
+
+# Case-insensitive words COUNTED per file, with up to three samples in which
+# every token-shaped run of 16+ characters is masked. This is the review
+# step for 'is anything sensitive in these files' — a redact pattern only
+# catches the shapes someone thought of, while a word count shows where to
+# look. Counting is not redaction: anything found here that IS a credential
+# needs a redact pattern before the push.
+config_log_backfill_audit_terms__default:
+  - token
+  - password
+  - passwd
+  - secret
+  - bearer
+  - authorization
+  - cookie
+  - apikey
+  - api_key
+  - sessionid
+
+# Extra verify assertions: [{labels, contains, at}] — a line containing
+# `contains` must be returned by Loki for the selector built from `labels`
+# in the one-second window at `at` (ISO-8601 with offset). Proves a known
+# line landed at its ORIGINAL time rather than at ingestion time.
+config_log_backfill_spot_checks__default: []
+
+# How long verify keeps re-reading while lines are only MISSING. Loki's
+# querier reads ingesters only for the last query_ingesters_within (3h by
+# default), so a backfilled — old — line is accepted but invisible until its
+# chunk flushes, ~chunk_idle_period (30m) after the stream goes quiet.
+# An EXTRA line is never retried. Set it past
+# chunk_idle_period plus a margin; '0s' reads once.
+config_log_backfill_verify_wait__default: 45m
+
+# Pause between verify reads while waiting.
+config_log_backfill_verify_interval__default: 60s
+
+# Upper bound on one push body. Further capped at half of Loki's
+# ingestion_burst_size_mb, read live.
+config_log_backfill_batch_bytes__default: 524288
+
+# Fraction of Loki's per-tenant ingestion rate (read live) the push may use.
+# The tenant is usually SHARED with every Alloy shipping live logs, so a
+# backfill that used the whole budget would 429 the live fleet.
+config_log_backfill_rate_fraction__default: 0.5
+
+# Interpreter on the target for files/loki_backfill.py (3.9+).
+config_log_backfill_python__default: python3

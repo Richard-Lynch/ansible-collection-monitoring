@@ -1,0 +1,49 @@
+---
+- name: Store vars
+  ansible.builtin.set_fact:
+    loki__files: "{{ role_path }}/files"
+    loki__config_dir: "/opt/{{ loki__name }}"
+    loki__data_volume: "{{ loki__name }}"
+    loki_image_version: "{{ loki_image_version | default(loki_image_version__default) }}"
+    loki_host_port: "{{ loki_host_port | default(loki_host_port__default) }}"
+    loki__index_store: "{{ loki__index_store | default(loki__index_store__default) }}"
+    loki__retention_period: "{{ loki__retention_period | default(loki__retention_period__default) }}"
+    loki_network: "{{ loki_network | default(loki_network__default) }}"
+    # Ruler — the mechanism for log-based alerting. See README.md "Log-based alerting".
+    loki_ruler_enabled: "{{ loki_ruler_enabled | default(loki_ruler_enabled__default) }}"
+    loki_ruler_alertmanager_url: >-
+      {{ loki_ruler_alertmanager_url | default(loki_ruler_alertmanager_url__default) }}
+    loki_ruler_tenant: "{{ loki_ruler_tenant | default(loki_ruler_tenant__default) }}"
+    loki_ruler_evaluation_interval: >-
+      {{ loki_ruler_evaluation_interval | default(loki_ruler_evaluation_interval__default) }}
+    loki_ruler_enable_api: "{{ loki_ruler_enable_api | default(loki_ruler_enable_api__default) }}"
+    # The ruler's rule directory, INSIDE the container. /loki is the mounted docker volume, so
+    # rules written here survive a container recreate. Derived rather than an option: the path is
+    # fixed by the volume mount in docker-compose.yml.j2, so a caller changing it would point the
+    # ruler at a directory outside the volume — writable, and silently emptied on recreate.
+    loki__rule_path: /loki/rules
+    # The ruler's SCRATCH directory, which it CLEANS ON STARTUP. It must NOT be the same path as
+    # loki__rule_path: pointing `rule_path` at the rules source makes Loki delete its own rules on
+    # every restart — see the note in files/config/loki-config.yml.j2.
+    loki__rule_scratch: /loki/rules-scratch
+    loki__tenant_rule_dir: "/loki/rules/{{ loki_ruler_tenant | default(loki_ruler_tenant__default) }}"
+    # THE VOLUME THE CONTAINER ACTUALLY MOUNTS, which is NOT loki__data_volume.
+    #
+    # docker-compose.yml declares `volumes: { loki: }` with no `name:`, so compose namespaces it
+    # with the project name and creates `loki_loki`. A standalone `docker_volume: name=loki` task
+    # would create a DIFFERENT, orphaned volume that nothing ever mounts:
+    #
+    #   docker inspect loki -> volume loki_loki -> /loki
+    #
+    # Directories "ensured" on the orphan are invisible while Loki creates its own chunk/wal dirs on
+    # startup, and matter the moment the ruler needs a directory to EXIST BEFORE Loki starts: the
+    # mkdir exits 0 and the ruler still answers HTTP 400 for a missing rule dir.
+    #
+    # Derived from the compose project name (the config dir's basename, which is what
+    # docker_compose_v2 uses as `project_src`) rather than hardcoded, so it stays correct if the
+    # deployment directory is ever renamed.
+    # Built from loki__name twice rather than from loki__data_volume: keys set in the SAME
+    # set_fact are not yet resolvable from one another, and both the compose project name and the
+    # volume name derive from loki__name anyway (project = basename of /opt/<name>, volume =
+    # <name>).
+    loki__compose_volume: "{{ loki__name }}_{{ loki__name }}"

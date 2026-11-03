@@ -1,0 +1,50 @@
+# Assert the rendered compose file matches the security-relevant defaults: image PINNED (never
+# `latest`), bind address loopback-only by default, and the bridge network mode (never `host` —
+# that could collide with another host-networked service).
+---
+- name: Verify rendered uptime-kuma compose
+  hosts: localhost
+  gather_facts: false
+  vars:
+    uptime_kuma_deploy_dir: "/tmp/molecule-uptime-kuma-render"
+  tasks:
+    - name: Read rendered docker-compose.yml
+      ansible.builtin.slurp:
+        src: "{{ uptime_kuma_deploy_dir }}/docker-compose.yml"
+      register: _compose
+
+    - name: Decode
+      ansible.builtin.set_fact:
+        compose_text: "{{ _compose.content | b64decode }}"
+
+    - name: Image is pinned to a specific tag, never latest
+      ansible.builtin.assert:
+        that:
+          - "'louislam/uptime-kuma:2.5.3' in compose_text"
+          - "'louislam/uptime-kuma:latest' not in compose_text"
+        fail_msg: "uptime-kuma image is not pinned to the expected tag (or latest crept in)."
+
+    - name: UI is bound to loopback by default (no admin account exists until first-run setup)
+      ansible.builtin.assert:
+        that:
+          - "'127.0.0.1:3001:3001' in compose_text"
+          - "'0.0.0.0:3001:3001' not in compose_text"
+        fail_msg: "uptime-kuma is not loopback-bound by default — this would expose an unclaimed instance."
+        success_msg: "Loopback-only bind confirmed."
+
+    - name: Runs on the bridge network, not host networking (must not collide with host services)
+      ansible.builtin.assert:
+        that:
+          - "'network_mode: bridge' in compose_text"
+          - "'network_mode: host' not in compose_text"
+        fail_msg: "uptime-kuma is not isolated on the bridge network — risk of colliding with host networking."
+
+    - name: Data volume is bind-mounted under /opt/uptime-kuma
+      ansible.builtin.assert:
+        that:
+          - "'/app/data' in compose_text"
+
+    - name: Clean up render dir
+      ansible.builtin.file:
+        path: "{{ uptime_kuma_deploy_dir }}"
+        state: absent

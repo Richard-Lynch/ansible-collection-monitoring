@@ -1,0 +1,50 @@
+# Offline scenario for config_log_backfill — the WHOLE path, against a stub Loki.
+#
+# Unlike config_log_alerts (which can only test its guards offline, because its install path is a
+# docker cp into a live container), this role's only external contact is three HTTP endpoints. So the
+# scenario runs fake_loki.py on loopback and drives the REAL role and the REAL script through:
+#
+#   plan (no push) -> push + verify -> re-run (must push nothing) -> injected HTTP 500 (must FAIL)
+#   -> resume after the failure (pushes exactly the remainder) -> verify-only action
+#   -> input guard (a run-dated or path-shaped campaign id is refused)
+#
+# The stub is strict where Loki is strict and the role's design depends on it: it rejects lines
+# older than reject_old_samples_max_age, rejects an entry more than the out-of-order window behind
+# its stream's newest (the reason backfill goes to a SEPARATE stream, in ascending order), and
+# dedupes identical (stream, timestamp, line). A stub that accepted anything would let a wrong
+# ordering pass. What it does NOT model — chunk flushing, retention, the querier's own dedupe of
+# flushed chunks — needs a real Loki; see the role README.
+#
+# The fixture's timestamps are computed from `now` in UTC, so the scenario is independent of the
+# runner's timezone (the role's timezone handling is exercised by the source's `timezone: UTC`).
+---
+dependency:
+  name: galaxy
+driver:
+  name: default
+platforms:
+  - name: localhost
+provisioner:
+  name: ansible
+  # Molecule runs from the scenario directory, so a project ansible.cfg roles_path does not
+  # resolve. Pointed at the roles directory so converge.yml include_roles the role under test.
+  env:
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/../"
+    # BOTH trees: the installed dependencies (collections.galaxy/) and the tree holding this
+    # role's own collection — molecule does not inherit ansible.cfg.
+    ANSIBLE_COLLECTIONS_PATH: "${MOLECULE_PROJECT_DIRECTORY}/../../collections.galaxy:${MOLECULE_PROJECT_DIRECTORY}/../../../../.."
+  inventory:
+    host_vars:
+      localhost:
+        ansible_connection: local
+  playbooks:
+    converge: converge.yml
+    verify: verify.yml
+verifier:
+  name: ansible
+scenario:
+  # No idempotence step: converge deliberately provokes failures (an injected HTTP 500, a bad
+  # campaign id) and catches them with block/rescue. The role's idempotence IS tested — as the
+  # "re-run pushes nothing" step inside converge, which is a stronger statement than a changed=0
+  # count because it also checks the HTTP request log.
+  test_sequence: [syntax, converge, verify]

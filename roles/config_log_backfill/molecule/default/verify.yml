@@ -1,0 +1,127 @@
+# Assert on what converge recorded. Each expectation names the property it protects, and each was
+# mutation-tested (the role or script broken on purpose, this file confirmed to fail) — see the
+# role README's "Tests" section for which mutation each one caught.
+---
+- name: Verify
+  hosts: localhost
+  gather_facts: false
+  vars:
+    _r: "{{ lookup('ansible.builtin.file', '/tmp/molecule-config-log-backfill/results.json') | from_json }}"
+  tasks:
+    - name: The plan counted the fixture correctly and pushed nothing
+      ansible.builtin.assert:
+        that:
+          # old one, old two (ROTATED, merged in), first (+2 continuation lines), dup, dup, login
+          - _r.plan.records_in_window == 6
+          - _r.plan.raw_lines_in_window == 8
+          # "header without time" — before the file's first timestamp, so it has none to inherit
+          - _r.plan.unparsed_lines == 1
+          - _r.plan.to_push == 6
+          - not _r.plan_pushed_anything
+          # the window ends at the seeded live line, located exactly rather than by time
+          - _r.plan_cut_how == 'earliest live line (matched)'
+          # one stream: the rotated file joins its live name rather than making its own
+          - _r.plan_streams | length == 1
+          - '''backfill="molecule-1"'' in _r.plan_streams[0]'
+        fail_msg: "Plan wrong: {{ _r.plan }} cut={{ _r.plan_cut_how }} streams={{ _r.plan_streams }}"
+
+    - name: The push landed every record, at its original time, and verify agreed
+      ansible.builtin.assert:
+        that:
+          - _r.push.pushed == 6
+          - _r.verify_ok
+          - _r.verify.missing_from_loki == 0
+          - _r.verify.extra_in_loki == 0
+          - _r.spot_ok == [true]
+          # the stub hid old entries from the first reads, as Loki's unflushed ingester does; a
+          # verify that read once would have failed a correct push
+          - _r.verify_attempts >= 2
+          # BOTH copies of a line repeated within one second survive Loki's dedupe
+          - _r.dup_count == 2
+          - _r.rotated_count == 1
+        fail_msg: "Push/verify wrong: {{ _r.push }} {{ _r.verify }} dup={{ _r.dup_count }} rotated={{ _r.rotated_count }}"
+
+    - name: The credential was redacted before it left the host
+      ansible.builtin.assert:
+        that:
+          - _r.login_lines | length == 1
+          - "'<redacted>' in _r.login_lines[0]"
+          - "'fixturefixture' not in _r.login_lines[0]"
+        fail_msg: "Redaction failed: {{ _r.login_lines }}"
+
+    - name: A re-run pushes NOTHING — not one HTTP request
+      ansible.builtin.assert:
+        that:
+          - _r.rerun_to_push == 0
+          - _r.rerun_already == 6
+          - not _r.rerun_push_ran
+          - _r.rerun_verify_ok
+          - _r.requests_after_rerun == _r.requests_after_push
+        fail_msg: "Re-run was not a no-op: {{ _r }}"
+
+    - name: A rejected push FAILS the play, and the next run resumes with exactly the remainder
+      ansible.builtin.assert:
+        that:
+          - _r.failed_on_500
+          - _r.error_status == 500
+          # caught by the PUSH gate, not merely by verify noticing the hole afterwards
+          - "'every batch must have been accepted' in _r.failed_500_task"
+          - _r.resume_pushed == 1
+          - _r.resume_verify_ok
+          - _r.resume_loki_entries == 7
+        fail_msg: "Failure/resume wrong: {{ _r }}"
+
+    - name: action=verify only verifies, and a bad campaign id is refused
+      ansible.builtin.assert:
+        that:
+          - _r.verify_only_ok
+          - not _r.verify_only_planned
+          - not _r.verify_only_pushed
+          - _r.bad_campaign_refused
+          # rc 0 with no report is a FAILURE at the script task itself, never a pass
+          - _r.empty_result_failed
+          - "'Verify — read the window back' in _r.empty_result_task"
+        fail_msg: "Verify-only / guard wrong: {{ _r }}"
+
+    - name: A backfilled copy of a live line is caught by verify and removed by repair_seam, exactly
+      ansible.builtin.assert:
+        that:
+          - _r.seam_failed
+          - _r.seam_dups == 1
+          # dry run: found, nothing deleted
+          - _r.repair_dry | length == 1
+          - _r.repair_dry[0].action == 'would delete'
+          # applied: one second, one entry, deleted
+          - _r.repair_applied | length == 1
+          - _r.repair_applied[0].duplicates == 1
+          - _r.repair_applied[0].entries == 1
+          - _r.repair_applied[0].action is match('deleted')
+          # and nothing ELSE went: the 7 real records are all still there
+          - _r.post_repair_ok
+          - _r.post_repair_seam == 0
+          - _r.post_repair_entries == 7
+        fail_msg: "Seam check/repair wrong: {{ _r }}"
+
+    - name: A seam duplicate covered by a PENDING delete is a warning, not a failure
+      ansible.builtin.assert:
+        that:
+          - _r.pending_ok
+          - _r.pending_seam == 0
+          - _r.pending_covered == 1
+          - _r.pending_warnings | length == 1
+          - "'PENDING Loki delete request' in _r.pending_warnings[0]"
+          # ...but only for the second it names: another copy in the same stream still fails
+          - _r.uncovered_failed
+          - _r.uncovered_seam == 1
+          - _r.uncovered_pending == 1
+        fail_msg: "Pending-delete handling wrong: {{ _r.pending_ok }} {{ _r.pending_seam }} {{ _r.pending_covered }} {{ _r.pending_warnings }}"
+
+    - name: Verify FAILS when the files and Loki disagree
+      ansible.builtin.assert:
+        that:
+          - _r.mismatch_failed
+          - "'Loki must hold exactly' in _r.mismatch_task"
+          # the changed line is both missing (new text) and extra (old text)
+          - _r.mismatch_verify.missing_from_loki == 1
+          - _r.mismatch_verify.extra_in_loki == 1
+        fail_msg: "Verify did not catch the mismatch: {{ _r.mismatch_failed }} {{ _r.mismatch_task | default('') }} {{ _r.mismatch_verify | default('') }}"

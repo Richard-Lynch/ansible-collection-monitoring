@@ -1,0 +1,58 @@
+# Offline scenario for config_log_alerts.
+#
+# HONEST SCOPE, and why it is narrower than config_alerts' scenario. config_alerts writes to a HOST
+# path, so its scenario can point the rules directory at a temp dir and exercise the whole install
+# path with no Prometheus. This role cannot: the Loki ruler's rule directory lives INSIDE the
+# container on a docker volume, so every install task goes through `docker cp`/`docker exec`, and
+# validation queries a live Loki. None of that exists on a molecule runner.
+#
+# So this scenario tests the half that IS testable offline, and tests it for real:
+#   * the GUARDS — owner-name traversal, an empty rule set, a rule with no expr. These are pure
+#     assertions over the caller's data and need nothing external.
+#   * the RENDERING — that Go template annotations reach the file verbatim, which is the property
+#     the to_nice_yaml + copy(content=) construction exists to guarantee and the one a regression
+#     to `template:` would silently break.
+#
+# What it deliberately does NOT cover, and where that IS covered instead:
+#   * the docker cp / chown-writability path and the ruler read-back -> need a live Loki: a
+#     round-trip run that installs a rule, watches it fire and removes it again proves them.
+#   * the LogQL validation gates -> they require a live Loki by design (Loki is the authoritative
+#     parser; reimplementing it in a test would be a second source of truth that drifts).
+#
+# Honest partial coverage beats none, and beats a scenario that stubs the thing under test and
+# asserts the stub.
+---
+dependency:
+  name: galaxy
+driver:
+  name: default
+platforms:
+  - name: localhost
+provisioner:
+  name: ansible
+  # Molecule runs from the scenario directory, so a project ansible.cfg roles_path does not
+  # resolve. Pointed at the roles directory explicitly so converge.yml can include_role the role
+  # under test — which is what makes this a real test of the role's own code rather than a
+  # re-derivation of its logic in the scenario.
+  env:
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/../"
+    # BOTH trees: the installed dependencies (collections.galaxy/) and the tree holding this
+    # role's own collection. Molecule does not inherit ansible.cfg, and a dev venv that bundles
+    # the collections in site-packages would hide the omission.
+    ANSIBLE_COLLECTIONS_PATH: "${MOLECULE_PROJECT_DIRECTORY}/../../collections.galaxy:${MOLECULE_PROJECT_DIRECTORY}/../../../../.."
+  inventory:
+    host_vars:
+      localhost:
+        ansible_connection: local
+  playbooks:
+    converge: converge.yml
+    verify: verify.yml
+verifier:
+  name: ansible
+scenario:
+  # No idempotence step. Converge deliberately provokes the role's guards (a traversing owner name,
+  # an empty rule set, a rule missing its expr) and catches the failures with block/rescue, so a
+  # second converge raises those same errors again — idempotence would read that as a broken ROLE
+  # when it is the negative tests working. The role's real idempotence needs a live Loki: two
+  # consecutive runs of the same owner report changed=0.
+  test_sequence: [syntax, converge, verify]

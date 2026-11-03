@@ -1,0 +1,175 @@
+---
+# DEFAULT ENTRYPOINT — the baseline log sources every host ships: journal, /var/log, and optionally
+# container logs. Runs on the SHIPPING host.
+#
+# Callers wanting more than the baseline use the `main` entrypoint alongside this one, under their
+# own owner name. See meta/argument_specs.py and README.md.
+
+- name: Resolve declared options over their generated defaults
+  # GENERATED from meta/argument_specs.py — binds every declared option to its default, so a
+  # default can never be declared-but-dead (the variable evaluating Undefined at run time).
+  ansible.builtin.include_tasks: _resolve_defaults.yml
+
+- name: Refuse to ship nothing
+  # All three sources off writes a drop-in declaring no components. Alloy loads it happily and this
+  # host silently stops shipping logs while the play reports success — the failure mode is an
+  # absence, which looks identical to a quiet host.
+  ansible.builtin.assert:
+    that:
+      - (config_logs_journal | bool) or (config_logs_system | bool) or (config_logs_docker | bool)
+    fail_msg: >-
+      config_logs (default) would ship nothing: journal, system and docker are all disabled. That
+      writes a drop-in with no components and silently stops this host shipping logs.
+
+- name: Set the baseline drop-in path
+  ansible.builtin.set_fact:
+    # A FIXED name, not per-owner: this is the host's baseline, and exactly one of it exists. The
+    # per-owner naming belongs to the `main` entrypoint, where several owners coexist.
+    _cl_baseline_path: "{{ config_logs_dir }}/logs_baseline.alloy"
+
+- name: Ensure the Alloy config directory exists
+  ansible.builtin.file:
+    path: "{{ config_logs_dir }}"
+    state: directory
+    mode: "0755"
+
+# --- validate BEFORE installing -----------------------------------------------------------------
+# A syntax error in ANY file in this directory fails the WHOLE agent's config load, so a bad
+# baseline takes down this host's metrics and logs together. Validated against a scratch copy
+# outside the config directory so a bad file is never loadable even briefly.
+- name: Validate the rendered baseline
+  when: config_logs_validate | bool
+  block:
+    - name: Render the baseline to a scratch path
+      ansible.builtin.template:
+        src: logs_baseline.alloy.j2
+        dest: /tmp/config-logs-baseline-candidate.alloy
+        mode: "0644"
+      changed_when: false
+
+    - name: Check it with `alloy fmt`
+      # This rejects as well as accepts: valid rc=0, malformed rc=1.
+      ansible.builtin.command:
+        cmd: "alloy fmt /tmp/config-logs-baseline-candidate.alloy"
+      register: _cl_bfmt
+      changed_when: false
+      failed_when: false
+
+    - name: Fail when the baseline is not valid Alloy config
+      # Gate on rc, never on stdout emptiness — `alloy fmt` writes the FORMATTED CONFIG to stdout on
+      # success, so non-empty stdout is the success case here, not the failure one.
+      ansible.builtin.assert:
+        that:
+          - _cl_bfmt.rc == 0
+        fail_msg: >-
+          alloy fmt rejected the baseline drop-in (rc={{ _cl_bfmt.rc }}). Nothing was installed.
+          {{ _cl_bfmt.stderr | default('') }}
+        success_msg: "alloy fmt accepted the baseline drop-in."
+
+  always:
+    - name: Remove the scratch copy
+      ansible.builtin.file:
+        path: /tmp/config-logs-baseline-candidate.alloy
+        state: absent
+      failed_when: false
+
+# --- retire the files this entrypoint replaces --------------------------------------------------
+# MUST happen before the new file lands. Older service_alloy layouts shipped these three, and
+# Alloy loads every *.alloy in the directory into ONE component namespace — so leaving them beside
+# logs_baseline.alloy is not "harmless duplication", it is a hard config-load failure for the WHOLE
+# agent, taking this host's metrics down with its logs:
+#   Error: b.alloy:1:1: block local.file_match.systemlogs already declared at a.alloy:1:1
+#
+# And `alloy fmt` does NOT catch it — each file is individually valid. Only loading them together
+# fails, so it would surface on the next Alloy restart rather than at deploy time.
+- name: Remove the drop-ins this baseline replaces
+  ansible.builtin.file:
+    path: "{{ config_logs_dir }}/{{ item }}"
+    state: absent
+  loop:
+    - logs_journal.alloy
+    - logs_system.alloy
+    - logs_docker.alloy
+  register: _cl_retired
+  notify: Restart Alloy for config_logs
+
+- name: Install the baseline log-shipping drop-in
+  ansible.builtin.template:
+    src: logs_baseline.alloy.j2
+    dest: "{{ _cl_baseline_path }}"
+    mode: "0644"
+  register: _cl_baseline_installed
+  notify: Restart Alloy for config_logs
+
+# --- prove it took effect -------------------------------------------------------------------
+# Handlers run at play end, so the restart has NOT happened yet here. Flush explicitly, then read
+# the agent's own component graph: a drop-in on disk that Alloy never loaded is worth nothing, and
+# a restart exiting 0 says nothing about whether the config inside it was accepted.
+- name: Confirm Alloy loaded the baseline components
+  when:
+    - config_logs_restart | bool
+    - (_cl_baseline_installed.changed | default(false)) or (_cl_retired.changed | default(false))
+  block:
+    - name: Apply the restart now rather than at play end
+      ansible.builtin.meta: flush_handlers
+
+    - name: Work out which components this baseline should have produced
+      # Derived from the same switches that drove the template, rather than a hardcoded count that
+      # would silently stop matching when a source is added.
+      ansible.builtin.set_fact:
+        _cl_expect: >-
+          {{ (['local.file_match.systemlogs', 'loki.source.file.systemlogs'] if config_logs_system | bool else [])
+             + (['loki.source.journal.journallogs', 'discovery.relabel.journallogs'] if config_logs_journal | bool else [])
+             + (['discovery.docker.dockerlogs', 'discovery.relabel.dockerlogs', 'loki.source.docker.default']
+                if config_logs_docker | bool else []) }}
+
+    - name: Ask Alloy which components it is running
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:12345/api/v0/web/components"
+        method: GET
+        return_content: true
+      register: _cl_bcomponents
+      # PARSED FROM `content`, NOT `.json` — Alloy serves this endpoint as `text/plain`, so
+      # Ansible's uri module never populates `.json` for it, with or without `body_format: json`.
+      # Read through `.json`, `default([])` would turn Undefined into an empty list, the until:
+      # loop would never match, and the assert would report EVERY expected component as
+      # "Missing" on a host where all of them are loaded and healthy. A check that always fails
+      # is as useless as one that always passes.
+      # `default('[]', true)`: the `true` also covers an EMPTY body. Alloy answers with nothing
+      # while it re-evaluates its graph after a restart, and a bare `default('[]')` passes that
+      # '' to from_json, which RAISES ("Expecting value: line 1 column 1") — aborting the retry
+      # loop on its first attempt instead of waiting. Not-yet-answered must retry; the assert
+      # below still fails loudly if it never answers.
+      until: >-
+        _cl_expect | difference(
+          (_cl_bcomponents.content | default('[]', true) | from_json)
+          | map(attribute='localID') | list
+        ) | length == 0
+      retries: 12
+      delay: 5
+      failed_when: false
+
+    - name: Read back what is actually loaded
+      # Recomputed from the last response rather than trusting the until: loop's own exit — a retry
+      # loop that exhausts its retries still reports the task green on its own.
+      ansible.builtin.set_fact:
+        _cl_live: >-
+          {{ (_cl_bcomponents.content | default('[]') | from_json)
+             | selectattr('localID', 'in', _cl_expect) | list }}
+
+    - name: Assert the baseline is loaded and healthy
+      ansible.builtin.assert:
+        that:
+          # The API must have returned SOMETHING parseable. Without this, a response that cannot
+          # be read at all (empty, truncated, an error page) reduces to "no components loaded" —
+          # indistinguishable from a genuinely broken agent.
+          - (_cl_bcomponents.content | default('') | trim | length) > 0
+          - _cl_expect | difference(_cl_live | map(attribute='localID') | list) | length == 0
+          - _cl_live | rejectattr('health.state', 'equalto', 'healthy') | list | length == 0
+        fail_msg: >-
+          Alloy did not load the baseline cleanly. Missing:
+          {{ _cl_expect | difference(_cl_live | map(attribute='localID') | list) }}. Unhealthy:
+          {{ _cl_live | rejectattr('health.state', 'equalto', 'healthy')
+             | map(attribute='localID') | list }}.
+        success_msg: >-
+          Alloy is running all {{ _cl_expect | length }} baseline component(s), healthy.

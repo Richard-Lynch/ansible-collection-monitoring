@@ -1,0 +1,27 @@
+---
+- name: Verify the rendered compose has the safety + wiring invariants
+  hosts: localhost
+  gather_facts: false
+  vars:
+    render_dir: /tmp/molecule-prometheus
+  tasks:
+    - name: Read the rendered compose
+      ansible.builtin.slurp: { src: "{{ render_dir }}/docker-compose.yml" }
+      register: _c
+    - name: Decode
+      ansible.builtin.set_fact:
+        compose: "{{ _c.content | b64decode }}"
+
+    - name: Retention caps (time + size), remote-write receiver, and shared network are present
+      ansible.builtin.assert:
+        that:
+          - "'--storage.tsdb.retention.time=30d' in compose"
+          - "'--storage.tsdb.retention.size=20GB' in compose"
+          - "'--web.enable-remote-write-receiver' in compose"
+          - "'external: true' in compose"          # joins an external network
+          - "'monitoring:' in compose"             # …named 'monitoring'
+        fail_msg: "prometheus compose missing a retention cap / remote-write / shared-network invariant."
+        success_msg: "prometheus compose OK — retention-capped, remote-write-ready, on shared network."
+
+    - name: Clean up
+      ansible.builtin.file: { path: "{{ render_dir }}", state: absent }

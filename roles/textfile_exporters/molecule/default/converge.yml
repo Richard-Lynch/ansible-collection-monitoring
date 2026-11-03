@@ -1,0 +1,275 @@
+---
+# Exercises the REAL exporter scripts against REAL sysfs-shaped fixtures.
+#
+# NOT a converge of the role's install tasks: those write systemd units and enable timers, which is
+# not something to do on the controller. The install path is verified on a real host by the
+# role's own read-back gates (sample count, exposition-format parse, node_exporter's own verdict).
+#
+# What this covers is the part those gates cannot re-run cheaply: the SCRIPTS' output contract.
+# A regression here — a duplicate HELP line, a container with no healthcheck exported as healthy,
+# a busy signal read from the wrong sysfs file — is silent in production and expensive to find.
+- name: Run the exporter scripts against fixtures
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    _tmp: "{{ lookup('env', 'MOLECULE_EPHEMERAL_DIRECTORY') | default('/tmp', true) }}/txe"
+
+  tasks:
+    - name: Create the fixture tree
+      ansible.builtin.file:
+        path: "{{ _tmp }}/{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        # A discrete Arc: two GTs, video engines on gt1, hwmon with fans and a power limit but
+        # NO temp sensor and NO VRAM attributes -- which is exactly what `xe` exposes for an Arc
+        # B570. Fixtures that invented those files would let the script "pass" while
+        # emitting series the real driver never produces.
+        - "sys/devices/pci0000:00/0000:03:00.0/tile0/gt0/freq0"
+        - "sys/devices/pci0000:00/0000:03:00.0/tile0/gt0/gtidle"
+        - "sys/devices/pci0000:00/0000:03:00.0/tile0/gt1/freq0"
+        - "sys/devices/pci0000:00/0000:03:00.0/tile0/gt1/gtidle"
+        - "sys/devices/pci0000:00/0000:03:00.0/tile0/gt1/engines/vcs0"
+        - "sys/devices/pci0000:00/0000:03:00.0/hwmon/hwmon4"
+        - "sys/class/drm"
+        - "out"
+        - "bin"
+
+    - name: Write the GPU sysfs fixture values
+      ansible.builtin.copy:
+        dest: "{{ _tmp }}/sys/devices/pci0000:00/0000:03:00.0/{{ item.p }}"
+        content: "{{ item.v }}\n"
+        mode: "0644"
+      loop:
+        - { p: "vendor", v: "0x8086" }
+        - { p: "device", v: "0xe20c" }
+        # gt0 = render GT, idle-but-clocked. gt1 = video GT, ACTIVELY TRANSCODING (act 400).
+        - { p: "tile0/gt0/freq0/act_freq", v: "0" }
+        - { p: "tile0/gt0/freq0/cur_freq", v: "1200" }
+        - { p: "tile0/gt0/freq0/max_freq", v: "2750" }
+        - { p: "tile0/gt0/freq0/min_freq", v: "1200" }
+        - { p: "tile0/gt0/gtidle/idle_residency_ms", v: "999999" }
+        - { p: "tile0/gt1/freq0/act_freq", v: "400" }
+        - { p: "tile0/gt1/freq0/cur_freq", v: "1200" }
+        - { p: "tile0/gt1/freq0/max_freq", v: "1500" }
+        - { p: "tile0/gt1/gtidle/idle_residency_ms", v: "888888" }
+        # DELIBERATELY NOT WRITTEN: tile0/gt1/freq0/min_freq. A sysfs attribute the driver does not
+        # expose must produce NO series -- a fabricated 0 would render as a real reading on a
+        # dashboard. Without a genuinely missing file here, that assertion has nothing to bite on.
+        - { p: "hwmon/hwmon4/fan1_input", v: "0" }
+        - { p: "hwmon/hwmon4/fan2_input", v: "1200" }
+        - { p: "hwmon/hwmon4/power1_crit", v: "320000000" }
+      loop_control:
+        label: "{{ item.p }}"
+
+    - name: Build the drm-shaped symlinks
+      # The script derives the PCI address from `basename $(readlink -f card*/device)`, exactly as
+      # the kernel lays it out: card0/device is a SYMLINK whose target directory is named for the
+      # PCI address. A fixture using a plain directory would produce a bogus address and the
+      # script's own `case` filter would skip the card -- so the symlink shape is load-bearing,
+      # not cosmetic.
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          mkdir -p "{{ _tmp }}/sys/class/drm/card0"
+          ln -sfn "{{ _tmp }}/sys/devices/pci0000:00/0000:03:00.0" \
+                  "{{ _tmp }}/sys/class/drm/card0/device"
+          # A driver symlink, so the `driver=` label is populated as it is in production.
+          mkdir -p "{{ _tmp }}/sys/bus/pci/drivers/xe"
+          ln -sfn "{{ _tmp }}/sys/bus/pci/drivers/xe" \
+                  "{{ _tmp }}/sys/devices/pci0000:00/0000:03:00.0/driver"
+      changed_when: false
+
+    - name: Run the GPU exporter against the fixture tree
+      # DRM_ROOT lets the script be pointed at a fixture instead of /sys/class/drm. Without it the
+      # script would only ever be testable on a host that physically has the card.
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: >-
+          DRM_ROOT={{ _tmp }}/sys/class/drm
+          bash {{ playbook_dir }}/../../files/intel-gpu-metrics.sh {{ _tmp }}/out/intel_gpu.prom
+      changed_when: false
+
+    - name: Write a fake docker that reports a known container set
+      # Stubs `docker`, not the script: the script's job is to turn docker's output into correct
+      # exposition, and that translation is what regresses. Covers all four states that matter --
+      # healthy, unhealthy, starting, and NO healthcheck at all.
+      ansible.builtin.copy:
+        dest: "{{ _tmp }}/bin/docker"
+        mode: "0755"
+        content: |
+          #!/usr/bin/env bash
+          case "$1" in
+            ps) echo -e "aaa\nbbb\nccc\nddd" ;;
+            inspect)
+              printf '/gluetun\ttrue\tunhealthy\t42\n'
+              printf '/homepage\ttrue\thealthy\t0\n'
+              printf '/starting-svc\ttrue\tstarting\t1\n'
+              printf '/jellyfin\ttrue\tnone\t0\n'
+              ;;
+          esac
+
+    - name: Run the docker health exporter against the stub
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: >-
+          PATH={{ _tmp }}/bin:$PATH
+          bash {{ playbook_dir }}/../../files/docker-health-metrics.sh
+          {{ _tmp }}/out/docker_health.prom
+      changed_when: false
+
+    - name: Run the docker exporter again with docker BROKEN
+      # The "docker is down" path must emit an explicit 0 rather than an empty file, so the
+      # dashboard can tell "docker died" from "the exporter never ran".
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          mkdir -p {{ _tmp }}/nodocker
+          printf '#!/bin/sh\nexit 1\n' > {{ _tmp }}/nodocker/docker
+          chmod +x {{ _tmp }}/nodocker/docker
+          PATH={{ _tmp }}/nodocker:/usr/bin:/bin \
+            bash {{ playbook_dir }}/../../files/docker-health-metrics.sh \
+            {{ _tmp }}/out/docker_broken.prom
+      changed_when: false
+
+    # --- WAN egress IP exporter ------------------------------------------------------------------
+    # `curl` is stubbed, not the script. The script's job is to turn a lookup result into correct
+    # exposition; the lookup itself is an external dependency that must NOT be exercised in a test
+    # (it would make the suite depend on internet access and on a real WAN address).
+    #
+    # Four runs, because the four cases produce genuinely different output and three of them are
+    # failure paths that are silent in production if they regress.
+    - name: Stub curl to return a known address
+      ansible.builtin.copy:
+        dest: "{{ _tmp }}/bin/curl"
+        mode: "0755"
+        content: |
+          #!/usr/bin/env bash
+          # Mimics `curl -fsS https://cloudflare.com/cdn-cgi/trace`, whose body is key=value lines.
+          echo "fl=123abc"
+          echo "ip=203.0.113.7"
+          echo "ts=1234567890"
+
+    - name: Run the WAN IP exporter — address MATCHES the pinned one
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: >-
+          PATH={{ _tmp }}/bin:$PATH
+          bash {{ playbook_dir }}/../../files/wan-egress-ip-metrics.sh
+          {{ _tmp }}/out/wan_match.prom 203.0.113.7
+      changed_when: false
+
+    - name: Run the WAN IP exporter — address DIFFERS from the pinned one
+      # The case the whole exporter exists for: the ISP moved us and the Access bypass has silently
+      # stopped matching.
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: >-
+          PATH={{ _tmp }}/bin:$PATH
+          bash {{ playbook_dir }}/../../files/wan-egress-ip-metrics.sh
+          {{ _tmp }}/out/wan_drift.prom 198.51.100.1
+      changed_when: false
+
+    - name: Run the WAN IP exporter with NO pinned address
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: >-
+          PATH={{ _tmp }}/bin:$PATH
+          bash {{ playbook_dir }}/../../files/wan-egress-ip-metrics.sh
+          {{ _tmp }}/out/wan_nopin.prom
+      changed_when: false
+
+    - name: Run the WAN IP exporter with the lookup BROKEN
+      # An uplink outage must not be indistinguishable from an IP change.
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          # ALL THREE fetch paths must fail, not just curl — the script falls back to wget and
+          # then python3, so stubbing curl alone no longer simulates an outage. A DEDICATED dir
+          # (not the one the no-curl case uses) so the two stubs cannot overwrite each other.
+          mkdir -p {{ _tmp }}/nofetch
+          for b in curl wget python3; do
+            printf '#!/bin/sh\nexit 7\n' > {{ _tmp }}/nofetch/$b
+            chmod +x {{ _tmp }}/nofetch/$b
+          done
+          # PREPEND the stub dir rather than replacing PATH: the stubs must shadow curl/wget/python3
+          # while grep, sed and mv stay reachable. Replacing PATH outright broke the script itself
+          # ("grep: command not found"), which tests nothing about the outage path.
+          PATH={{ _tmp }}/nofetch:$PATH \
+            /bin/bash {{ playbook_dir }}/../../files/wan-egress-ip-metrics.sh \
+            {{ _tmp }}/out/wan_down.prom 203.0.113.7
+      changed_when: false
+
+    - name: Run the WAN IP exporter when the lookup returns GARBAGE
+      # A captive portal or an ISP error page returns 200 with HTML. Exporting that as an address
+      # would put markup into a Prometheus label.
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          mkdir -p {{ _tmp }}/junkcurl
+          printf '#!/bin/sh\necho "<html>login required</html>"\n' > {{ _tmp }}/junkcurl/curl
+          chmod +x {{ _tmp }}/junkcurl/curl
+          PATH={{ _tmp }}/junkcurl:/usr/bin:/bin \
+            bash {{ playbook_dir }}/../../files/wan-egress-ip-metrics.sh \
+            {{ _tmp }}/out/wan_junk.prom 203.0.113.7
+      changed_when: false
+
+    - name: Run the WAN IP exporter with NO curl on PATH (wget/python3 fallback)
+      # A minimal host often has no curl. A curl-only version would install cleanly, pass every
+      # gate, and report lookup_success 0 forever, which is indistinguishable from a genuine
+      # uplink failure. The stub here provides
+      # wget only, so this proves the fallback chain and not merely that curl works.
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          mkdir -p {{ _tmp }}/wgetonly
+          # A "curl" that always fails, plus a "wget" that returns a known body.
+          printf '#!/bin/sh\nexit 127\n' > {{ _tmp }}/wgetonly/curl
+          printf '#!/bin/sh\necho "ip=203.0.113.7"\n' > {{ _tmp }}/wgetonly/wget
+          chmod +x {{ _tmp }}/wgetonly/curl {{ _tmp }}/wgetonly/wget
+          PATH={{ _tmp }}/wgetonly:/usr/bin:/bin \
+            bash {{ playbook_dir }}/../../files/wan-egress-ip-metrics.sh \
+            {{ _tmp }}/out/wan_nocurl.prom 203.0.113.7
+      changed_when: false
+
+    # --- WireGuard exporter ----------------------------------------------------------------
+    # Stubs `wg`, not the script. The script's job is turning `wg show dump` into correct
+    # exposition, and that translation is what regresses. Fixtures use the REAL field layout of
+    # `wg show dump`: peer lines are 8 tab-separated fields with handshake epoch
+    # at [5], rx at [6], tx at [7].
+    - name: Stub wg with a healthy two-peer tunnel
+      ansible.builtin.copy:
+        dest: "{{ _tmp }}/bin/wg"
+        mode: "0755"
+        content: |
+          #!/usr/bin/env bash
+          # interface line: private-key, public-key, listen-port, fwmark
+          printf 'PRIVKEY\tPUBKEY\t51820\toff\n'
+          # peer 1: fresh handshake, traffic BOTH ways
+          printf 'PEER_OK\t(none)\t192.0.2.2:51820\t198.51.100.2/32\t%s\t4680\t6012\t25\n' "$(( $(date +%s) - 30 ))"
+          # peer 2: handshake NEVER completed (epoch 0) — must not look merely stale
+          printf 'PEER_NEVER\t(none)\t(none)\t198.51.100.3/32\t0\t0\t0\t0\n'
+
+    - name: Run the WireGuard exporter against the stub
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: >-
+          PATH={{ _tmp }}/bin:$PATH
+          bash {{ playbook_dir }}/../../files/wireguard-metrics.sh
+          {{ _tmp }}/out/wireguard.prom wg0
+      changed_when: false
+
+    - name: Run it again with wg ABSENT
+      # "the interface is gone" and "the exporter never ran" must not look the same.
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          mkdir -p {{ _tmp }}/nowg
+          printf '#!/bin/sh\nexit 1\n' > {{ _tmp }}/nowg/wg
+          chmod +x {{ _tmp }}/nowg/wg
+          PATH={{ _tmp }}/nowg:/usr/bin:/bin \
+            bash {{ playbook_dir }}/../../files/wireguard-metrics.sh \
+            {{ _tmp }}/out/wireguard_down.prom wg0
+      changed_when: false

@@ -1,0 +1,42 @@
+# Copyright: (c) 2026, Richard Lynch
+# GNU General Public License v3.0+ (see https://www.gnu.org/licenses/gpl-3.0.txt)
+# SPDX-License-Identifier: GPL-3.0-or-later
+---
+namespace: richard_lynch
+name: monitoring
+version: 1.0.0
+readme: README.md
+authors:
+  - Richard Lynch
+description: >-
+  Observability roles: Prometheus, Alertmanager, Loki, Grafana, Alloy, node_exporter, Uptime Kuma, Apprise and a Homepage dashboard as Docker Compose services; plus the cross-cutting roles that give any host or service its metrics, logs, alert rules, log alert rules, textfile exporters and notification targets.
+license:
+  - GPL-3.0-or-later
+tags:
+  - monitoring
+  - observability
+  - prometheus
+  - grafana
+  - loki
+  - docker
+dependencies:
+  community.docker: ">=4.0.0"
+  richard_lynch.common: ">=1.0.0,<2.0.0"
+repository: https://github.com/Richard-Lynch/ansible-collection-monitoring
+documentation: https://github.com/Richard-Lynch/ansible-collection-monitoring/blob/main/README.md
+homepage: https://github.com/Richard-Lynch/ansible-collection-monitoring
+issues: https://github.com/Richard-Lynch/ansible-collection-monitoring/issues
+build_ignore:
+  - .ansible-lint
+  - configured_roles.txt
+  - roles/*/defaults/SKIP
+  - .github
+  - .gitignore
+  - collections.galaxy
+  - devkit.toml
+  - dist
+  - export.manifest
+  - tests/output
+  - roles/*/meta/argument_specs.py
+  - roles/*/molecule
+  - "*.tar.gz"

@@ -1,0 +1,91 @@
+---
+# AUTO-GENERATED argument spec — DO NOT EDIT.
+#
+# Source of truth: roles/service_grafana/meta/argument_specs.py
+# Regenerate:      venv/bin/python tools/argspec/cli.py x generate service_grafana
+#
+# Edits here are silently overwritten on the next generation. To change a value or its
+# documentation, change the OptionSpec in the source file above — descriptions there
+# are emitted as the comments in this file.
+argument_specs:
+  main:
+    short_description: Deploy Grafana (Postgres backend, provisioned datasources) on a shared net
+    version_added: '1.0'
+    author: Collection maintainers
+    options:
+      grafana_container_name:
+        description:
+          - Container name.
+        type: str
+        required: false
+      grafana_image_version:
+        description:
+          - grafana-oss image tag.
+        type: str
+        required: false
+        default: 12.1.1
+      grafana_host_port:
+        description:
+          - Host port → 3000 (0 = none).
+        type: int
+        required: false
+      grafana_admin_user:
+        description:
+          - Admin username.
+        type: str
+        required: false
+      grafana_admin_password:
+        description:
+          - Admin password (from a secret store; placeholder rejected).
+        type: str
+        required: false
+        no_log: true
+      grafana_server_root_url:
+        description:
+          - GF_SERVER_ROOT_URL.
+        type: str
+        required: false
+      grafana_network:
+        description:
+          - Shared external docker network.
+        type: str
+        required: false
+        default: monitoring
+      grafana_db_host:
+        description:
+          - Postgres host (container name).
+        type: str
+        required: false
+      grafana_db_port:
+        description:
+          - Postgres port.
+        type: int
+        required: false
+      grafana_db_name:
+        description:
+          - Grafana database name.
+        type: str
+        required: false
+      grafana_db_user:
+        description:
+          - Grafana DB role.
+        type: str
+        required: false
+      grafana_db_password:
+        description:
+          - Grafana DB role password (from a secret store; placeholder rejected).
+        type: str
+        required: false
+        no_log: true
+      grafana_dashboards_src:
+        description:
+          - Controller directory of dashboard JSON files to provision (copied into the
+          - "provisioner's directory). Empty ships none: dashboards are installation data."
+        type: str
+        required: false
+      grafana_dashboards_folder:
+        description:
+          - Grafana folder for the provisioned dashboards. Never 'General', which Grafana
+          - 'already owns: provisioning into it fails and loads no dashboard at all.'
+        type: str
+        required: false

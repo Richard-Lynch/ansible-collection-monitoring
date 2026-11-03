@@ -1,0 +1,23 @@
+services:
+  {{ grafana_container_name }}:
+    image: grafana/grafana-oss:{{ grafana_image_version }}
+    container_name: {{ grafana_container_name }}
+    restart: unless-stopped
+    env_file:
+      - ./grafana.env
+{% if grafana_host_port | int > 0 %}
+    ports:
+      - {{ grafana_host_port }}:3000
+{% endif %}
+    volumes:
+      - {{ grafana_data_volume }}:/var/lib/grafana
+      - {{ grafana_config_dir }}/provisioning/:/etc/grafana/provisioning/
+    networks:
+      - {{ grafana_network }}
+
+networks:
+  {{ grafana_network }}:
+    external: true
+
+volumes:
+  {{ grafana_data_volume }}:

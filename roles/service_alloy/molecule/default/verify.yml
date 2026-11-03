@@ -1,0 +1,26 @@
+---
+- name: Verify alloy targets config
+  hosts: localhost
+  gather_facts: false
+  vars:
+    render_dir: /tmp/molecule-alloy
+  tasks:
+    - name: Read rendered targets
+      ansible.builtin.slurp: { src: "{{ render_dir }}/targets.alloy" }
+      register: _t
+    - name: Decode
+      ansible.builtin.set_fact:
+        targets: "{{ _t.content | b64decode }}"
+
+    - name: Loki push + Prometheus remote-write URLs and labels are correct
+      ansible.builtin.assert:
+        that:
+          - "'http://localhost:3100/loki/api/v1/push' in targets"
+          - "'http://localhost:9090/api/v1/write' in targets"
+          - "'\"platform\"  = \"vm\"' in targets"
+          - "'parenthostname' in targets"        # vm → parent label present
+        fail_msg: "alloy targets missing a loki/prometheus URL or external label."
+        success_msg: "alloy targets OK — loki push + prom remote-write + labels."
+
+    - name: Clean up
+      ansible.builtin.file: { path: "{{ render_dir }}", state: absent }

@@ -1,0 +1,82 @@
+---
+# Render loki's compose + config from the ROLE'S OWN variable derivation, with no docker.
+#
+# WHY IT INCLUDES setup_vars.yml RATHER THAN LISTING THE VARIABLES. A scenario that hand-sets
+# every variable the templates reference is a SECOND SOURCE OF TRUTH for the role's resolution,
+# and it drifts: the role gains an option and the scenario fails with `'<option>' is undefined`,
+# which reads as a BROKEN ROLE and is actually a STALE TEST.
+#
+# So the scenario includes the role's real `setup_vars.yml`, which is where service_loki binds
+# every option over its generated default. The role gaining an option needs no change here.
+#
+# `include_role` with `tasks_from:` rather than `include_tasks:`, because setup_vars.yml derives
+# `loki__files: "{{ role_path }}/files"` and `role_path` is only defined inside a role context —
+# `include_tasks` would leave it undefined. That also makes `loki__files` correct, so the template
+# paths below come from the role itself instead of being rebuilt from `playbook_dir`.
+#
+# NOTHING IS DEPLOYED. No docker, no containers, no volumes: the templates are rendered to a temp
+# directory and verify.yml asserts on the rendered text.
+- name: Converge — render loki compose + config (no docker)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    # The ONLY variable this scenario sets. Everything the templates reference — image version,
+    # index store, retention period, network, both ruler paths and all five ruler options — comes
+    # from the role's own defaults via setup_vars.yml below, so the role gaining an option needs
+    # no change here.
+    render_dir: /tmp/molecule-loki
+  tasks:
+    - name: Resolve the role's variables exactly as the role does
+      # tasks_from: setup_vars — the role's real derivation, not a copy of it. Only that one task
+      # file runs, so no docker task is reached.
+      #
+      # `public: true` is REQUIRED. By default include_role scopes the role's vars/ and defaults/
+      # to the include itself, so `loki__name` (set in the role's vars/main.yml) is gone by the
+      # time the template tasks below run ("'loki__name' is undefined"). The facts that
+      # setup_vars sets with set_fact would survive, but the role vars they are derived FROM would
+      # not, which is a confusing half-state. public: true exports both.
+      ansible.builtin.include_role:
+        name: service_loki
+        tasks_from: setup_vars
+        public: true
+
+    - name: Make render dirs
+      ansible.builtin.file: { path: "{{ render_dir }}/config", state: directory, mode: "0755" }
+
+    - name: Render compose
+      ansible.builtin.template:
+        src: "{{ loki__files }}/docker-compose.yml.j2"
+        dest: "{{ render_dir }}/docker-compose.yml"
+        mode: "0644"
+
+    - name: Render loki config
+      ansible.builtin.template:
+        src: "{{ loki__files }}/config/loki-config.yml.j2"
+        dest: "{{ render_dir }}/config/loki-config.yml"
+        mode: "0644"
+
+    # --- also render with the ruler OFF, so the conditional is exercised both ways -------------
+    # `loki_ruler_enabled: false` is the one documented reason to disable the ruler, and a
+    # template whose `{% if %}` has only ever been rendered TRUE can hide a syntax error — or a
+    # missing-variable error — in the other branch.
+    #
+    # THE OVERRIDE HAS TO BE A set_fact, not a task-level `vars:`. setup_vars.yml sets
+    # loki_ruler_enabled with set_fact, and a set_fact OUTRANKS a task vars entry — so
+    # `vars: {loki_ruler_enabled: false}` on the template task below rendered the ruler stanza
+    # anyway, and the "ruler disabled" assertion in verify.yml would test nothing.
+    #
+    # Same family as the traps this role already carries: a value that looks overridden and is
+    # not. The fact is restored immediately afterwards so nothing downstream sees the off state.
+    - name: Turn the ruler off for the next render only
+      ansible.builtin.set_fact:
+        loki_ruler_enabled: false
+
+    - name: Render the config again with the ruler disabled
+      ansible.builtin.template:
+        src: "{{ loki__files }}/config/loki-config.yml.j2"
+        dest: "{{ render_dir }}/config/loki-config-noruler.yml"
+        mode: "0644"
+
+    - name: Restore the ruler fact
+      ansible.builtin.set_fact:
+        loki_ruler_enabled: true

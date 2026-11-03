@@ -1,0 +1,3 @@
+{#- Rendered by Jinja (deployment_config strips .j2); everything else here is a Go template. -#}
+{% raw %}{{/* Optional last line of every notification body: alertmanager_notification_footer (empty = none). */}}
+{{- define "apprise.footer" -}}{% endraw %}{{ alertmanager_notification_footer }}{% raw %}{{- end -}}{% endraw %}

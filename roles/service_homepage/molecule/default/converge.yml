@@ -1,0 +1,102 @@
+---
+# Renders the compose file and runs the role's REAL config validation (tasks/validate.yml) against
+# the role's default config and against fixtures — both directions: a good config must pass, and a
+# section/layout mismatch or a forbidden link must be refused. No container is started.
+- name: Converge — render homepage compose and validate config (no docker)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    homepage_container_name: homepage
+    homepage_image: "ghcr.io/gethomepage/homepage:v1.4.3"
+    homepage_config_dir: /tmp/molecule-homepage/opt
+    homepage_network: monitoring
+    homepage_host_port: 3010
+    homepage_puid: 1000
+    homepage_pgid: 1000
+    homepage_umask: "002"
+    homepage_tz: "Etc/UTC"
+    homepage_allowed_hosts: "homepage.example.test,monitoring.example.test"
+    homepage_title: "Example Home"
+    homepage_description: "Overview"
+    homepage_instance_name: "example"
+    # One key SET (sonarr) and one left EMPTY (radarr) — verify.yml asserts the set one renders a
+    # widget block and the empty one does not, proving the {% raw %}{% if %}{% endraw %} guard works
+    # both ways.
+    homepage_sonarr_api_key: "FIXTURE"
+    homepage_radarr_api_key: ""
+    render_dir: /tmp/molecule-homepage
+    _fixtures: "{{ playbook_dir }}/fixtures"
+    _results: {}
+  tasks:
+    - ansible.builtin.file: { path: "{{ render_dir }}", state: directory, mode: "0755" }
+    - ansible.builtin.template:
+        src: "{{ playbook_dir }}/../../files/docker-compose.yml.j2"
+        dest: "{{ render_dir }}/docker-compose.yml"
+        mode: "0644"
+    - name: Render the compose file with no allowed-hosts value
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../../files/docker-compose.yml.j2"
+        dest: "{{ render_dir }}/docker-compose.noallowed.yml"
+        mode: "0644"
+      vars:
+        homepage_allowed_hosts: ""
+    - name: Render the good fixture's services for the widget-guard checks
+      ansible.builtin.template:
+        src: "{{ _fixtures }}/good/services.yaml.j2"
+        dest: "{{ render_dir }}/services.yaml"
+        mode: "0644"
+
+    - name: CASE defaults — the role's own default config validates
+      block:
+        - ansible.builtin.set_fact:
+            _homepage_config_src: "{{ playbook_dir }}/../../templates/config"
+        - ansible.builtin.include_role: { name: service_homepage, tasks_from: validate }
+        - ansible.builtin.set_fact: { _results: "{{ _results | combine({'defaults': 'passed'}) }}" }
+      rescue:
+        - ansible.builtin.set_fact:
+            _results: "{{ _results | combine({'defaults': ansible_failed_result.msg | default('failed')}) }}"
+
+    - name: CASE good — a valid caller config validates
+      block:
+        - ansible.builtin.set_fact: { _homepage_config_src: "{{ _fixtures }}/good" }
+        - ansible.builtin.include_role: { name: service_homepage, tasks_from: validate }
+        - ansible.builtin.set_fact: { _results: "{{ _results | combine({'good': 'passed'}) }}" }
+      rescue:
+        - ansible.builtin.set_fact:
+            _results: "{{ _results | combine({'good': ansible_failed_result.msg | default('failed')}) }}"
+
+    - name: CASE mismatch — a services section with no layout entry is refused
+      block:
+        - ansible.builtin.set_fact: { _homepage_config_src: "{{ _fixtures }}/mismatch" }
+        - ansible.builtin.include_role: { name: service_homepage, tasks_from: validate }
+        - ansible.builtin.set_fact: { _results: "{{ _results | combine({'mismatch': 'NOT REFUSED'}) }}" }
+      rescue:
+        - ansible.builtin.set_fact:
+            _results: "{{ _results | combine({'mismatch': ansible_failed_result.msg | default('')}) }}"
+
+    - name: CASE forbidden — a card linking a declared-dead host is refused
+      block:
+        - ansible.builtin.set_fact: { _homepage_config_src: "{{ _fixtures }}/good" }
+        - ansible.builtin.include_role: { name: service_homepage, tasks_from: validate }
+          vars:
+            homepage_forbidden_href_patterns: ['radarr\.example\.test']
+        - ansible.builtin.set_fact: { _results: "{{ _results | combine({'forbidden': 'NOT REFUSED'}) }}" }
+      rescue:
+        - ansible.builtin.set_fact:
+            _results: "{{ _results | combine({'forbidden': ansible_failed_result.msg | default('')}) }}"
+
+    - name: CASE bookmark — a bookmark matching the forbidden pattern is refused
+      block:
+        - ansible.builtin.set_fact: { _homepage_config_src: "{{ _fixtures }}/good" }
+        - ansible.builtin.include_role: { name: service_homepage, tasks_from: validate }
+          vars:
+            homepage_bookmarks_forbidden_href_pattern: 'example\.com'
+        - ansible.builtin.set_fact: { _results: "{{ _results | combine({'bookmark': 'NOT REFUSED'}) }}" }
+      rescue:
+        - ansible.builtin.set_fact:
+            _results: "{{ _results | combine({'bookmark': ansible_failed_result.msg | default('')}) }}"
+
+    - ansible.builtin.copy:
+        content: "{{ _results | to_json }}"
+        dest: "{{ render_dir }}/results.json"
+        mode: "0644"

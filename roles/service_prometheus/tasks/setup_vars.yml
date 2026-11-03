@@ -1,0 +1,17 @@
+---
+- name: Store vars
+  ansible.builtin.set_fact:
+    prometheus__files: "{{ role_path }}/files"
+    prometheus__config_dir: "/opt/{{ prometheus__name }}"
+    prometheus_image_version: "{{ prometheus_image_version | default(prometheus_image_version__default) }}"
+    prometheus_host_port: "{{ prometheus_host_port | default(prometheus_host_port__default) }}"
+    prometheus_retention_time: "{{ prometheus_retention_time | default(prometheus_retention_time__default) }}"
+    prometheus_retention_size: "{{ prometheus_retention_size | default(prometheus_retention_size__default) }}"
+    prometheus_network: "{{ prometheus_network | default(prometheus_network__default) }}"
+    # THESE TWO MUST BE RESOLVED HERE. The generator emits `<name>__default`, and the template
+    # reads the PLAIN name with `| default(false)`. Without these lines
+    # `prometheus_alertmanager_enabled` is undefined at render time, the template takes the false
+    # branch, and prometheus.yml ships with BOTH `alerting:` and `rule_files:` removed — Prometheus
+    # then loads zero alert rules while everything looks monitored.
+    prometheus_alertmanager_enabled: "{{ prometheus_alertmanager_enabled | default(prometheus_alertmanager_enabled__default) }}"
+    prometheus_alertmanager_target: "{{ prometheus_alertmanager_target | default(prometheus_alertmanager_target__default) }}"

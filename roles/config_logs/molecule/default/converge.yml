@@ -1,0 +1,235 @@
+# Exercise the role's REAL template and its guards, with no Alloy.
+#
+# NOTHING IS INSTALLED ANYWHERE REAL and nothing is restarted. config_logs_dir is a temp dir,
+# config_logs_validate is false (alloy fmt is not in CI) and config_logs_restart is false (there is
+# no systemd here, and a test that depends on something the developer machine happens to have fails
+# in a way that reads as a flaky runner).
+#
+# config_logs_restart is a REAL option, not a test hook: a play registering several owners on one
+# host uses it to take a single restart at the end instead of one per owner. Overriding the role's
+# handler from the scenario does NOT work — a play-level handler of the same name does not shadow a
+# role handler, so the role needs a real switch either way.
+#
+# What is under test is the property that makes drop-ins safe: every component id carries the
+# owner's prefix, because Alloy shares ONE namespace across every file in its config directory and
+# a duplicate id fails the whole agent's config load.
+---
+- name: Converge
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    _tmp: /tmp/molecule-config-logs
+
+  tasks:
+    - name: Make a render dir
+      ansible.builtin.file:
+        path: "{{ _tmp }}"
+        state: directory
+        mode: "0755"
+
+    - name: Load the role's generated defaults
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/../../defaults/main.yml"
+
+    # --- 1. an owner whose name contains a hyphen -------------------------------------------------
+    - name: Register log shipping for a first owner
+      # include_role, not a hand-rolled copy of the role's logic: a scenario that re-derives the
+      # role's own template or filters asserts a copy against itself and stays green while the role
+      # regresses.
+      #
+      # The hyphen is deliberate — Alloy component ids are identifiers and cannot contain one, so
+      # the role must translate it. 'app-stack' keeps the owner name consistent with the same
+      # entity's config_alerts / config_metrics owner.
+      ansible.builtin.include_role:
+        name: config_logs
+      vars:
+        config_logs_owner: app-stack
+        config_logs_dir: "{{ _tmp }}/alloy.d"
+        config_logs_validate: false
+        config_logs_restart: false
+        config_logs_sources:
+          - name: qbittorrent
+            paths: ["/var/log/qbittorrent/*.log"]
+            labels: {component: qbittorrent}
+          - name: sabnzbd
+            paths: ["/var/log/sabnzbd/*.log", "/var/log/sabnzbd/old/*.log"]
+            exclude: "/var/log/sabnzbd/*.previous.log"
+            tail_from_end: true
+
+    # --- 2. a SECOND owner must not collide -------------------------------------------------------
+    - name: Register log shipping for a second owner
+      ansible.builtin.include_role:
+        name: config_logs
+      vars:
+        config_logs_owner: web-app
+        config_logs_dir: "{{ _tmp }}/alloy.d"
+        config_logs_validate: false
+        config_logs_restart: false
+        config_logs_sources:
+          - name: app
+            paths: ["/var/log/web-app/app.log"]
+
+    # --- 3. removal by the owner ------------------------------------------------------------------
+    - name: Register a third owner
+      ansible.builtin.include_role:
+        name: config_logs
+      vars:
+        config_logs_owner: doomed
+        config_logs_dir: "{{ _tmp }}/alloy.d"
+        config_logs_validate: false
+        config_logs_restart: false
+        config_logs_sources:
+          - name: app
+            paths: ["/var/log/doomed.log"]
+
+    - name: Confirm the third owner exists before removal
+      # Without this the removal assertion in verify.yml would pass just as happily against a file
+      # that was never created — absence proves nothing on its own.
+      ansible.builtin.stat:
+        path: "{{ _tmp }}/alloy.d/logs_doomed.alloy"
+      register: _c_before
+
+    - name: Remove the third owner
+      ansible.builtin.include_role:
+        name: config_logs
+      vars:
+        config_logs_owner: doomed
+        config_logs_dir: "{{ _tmp }}/alloy.d"
+        config_logs_state: absent
+        config_logs_validate: false
+        config_logs_restart: false
+
+    # --- 4. guards MUST fire ----------------------------------------------------------------------
+    # `ignore_errors` on an include_role does NOT catch a failure raised by a task INSIDE the
+    # included role — the include itself succeeded. block/rescue is what actually catches it.
+    - name: A path-traversal owner name is rejected
+      block:
+        - name: Attempt to register with a traversing owner name
+          ansible.builtin.include_role:
+            name: config_logs
+          vars:
+            config_logs_owner: "../escaped"
+            config_logs_dir: "{{ _tmp }}/alloy.d"
+            config_logs_validate: false
+            config_logs_restart: false
+            config_logs_sources: [{name: x, paths: ["/var/log/x.log"]}]
+        - name: The traversal guard did NOT fire
+          ansible.builtin.set_fact:
+            _traversal_failed: false
+      rescue:
+        - name: The traversal guard fired, as required
+          ansible.builtin.set_fact:
+            _traversal_failed: true
+
+    - name: An empty source set with state=present is rejected
+      block:
+        - name: Attempt to register with no sources
+          ansible.builtin.include_role:
+            name: config_logs
+          vars:
+            config_logs_owner: empty-owner
+            config_logs_dir: "{{ _tmp }}/alloy.d"
+            config_logs_validate: false
+            config_logs_restart: false
+            config_logs_sources: []
+        - name: The empty guard did NOT fire
+          ansible.builtin.set_fact:
+            _empty_failed: false
+      rescue:
+        - name: The empty guard fired, as required
+          ansible.builtin.set_fact:
+            _empty_failed: true
+
+    - name: A source with no paths is rejected
+      # Renders as valid Alloy config that loads cleanly and ships ZERO lines. The symptom is
+      # missing logs, indistinguishable from an application that is simply quiet.
+      block:
+        - name: Attempt to register a pathless source
+          ansible.builtin.include_role:
+            name: config_logs
+          vars:
+            config_logs_owner: pathless
+            config_logs_dir: "{{ _tmp }}/alloy.d"
+            config_logs_validate: false
+            config_logs_restart: false
+            config_logs_sources: [{name: ghost, paths: []}]
+        - name: The pathless guard did NOT fire
+          ansible.builtin.set_fact:
+            _pathless_failed: false
+      rescue:
+        - name: The pathless guard fired, as required
+          ansible.builtin.set_fact:
+            _pathless_failed: true
+
+    - name: Duplicate source names within one owner are rejected
+      # Two sources with the same name emit two components with the same id, which fails the config
+      # load for the WHOLE agent — not just this file.
+      block:
+        - name: Attempt to register duplicate source names
+          ansible.builtin.include_role:
+            name: config_logs
+          vars:
+            config_logs_owner: dupes
+            config_logs_dir: "{{ _tmp }}/alloy.d"
+            config_logs_validate: false
+            config_logs_restart: false
+            config_logs_sources:
+              - {name: same, paths: ["/var/log/a.log"]}
+              - {name: same, paths: ["/var/log/b.log"]}
+        - name: The duplicate guard did NOT fire
+          ansible.builtin.set_fact:
+            _dupes_failed: false
+      rescue:
+        - name: The duplicate guard fired, as required
+          ansible.builtin.set_fact:
+            _dupes_failed: true
+
+    # --- 5. the DEFAULT entrypoint (the baseline every host ships) --------------------------------
+    - name: Install the baseline via the default entrypoint
+      ansible.builtin.include_role:
+        name: config_logs
+        tasks_from: default
+      vars:
+        config_logs_dir: "{{ _tmp }}/alloy.d"
+        config_logs_validate: false
+        config_logs_restart: false
+        config_logs_docker: true
+
+    - name: A baseline shipping NOTHING is rejected
+      # All three sources off writes a drop-in with no components: Alloy loads it happily and the
+      # host silently stops shipping logs. The failure is an absence, which looks like a quiet host.
+      block:
+        - name: Attempt a baseline with every source disabled
+          ansible.builtin.include_role:
+            name: config_logs
+            tasks_from: default
+          vars:
+            config_logs_dir: "{{ _tmp }}/alloy.d"
+            config_logs_validate: false
+            config_logs_restart: false
+            config_logs_journal: false
+            config_logs_system: false
+            config_logs_docker: false
+        - name: The empty-baseline guard did NOT fire
+          ansible.builtin.set_fact:
+            _baseline_empty_failed: false
+      rescue:
+        - name: The empty-baseline guard fired, as required
+          ansible.builtin.set_fact:
+            _baseline_empty_failed: true
+
+    - name: Hand the results to verify.yml
+      # set_fact does not cross molecule's converge/verify playbook boundary; a file does.
+      ansible.builtin.copy:
+        dest: "{{ _tmp }}/results.json"
+        mode: "0644"
+        content: |
+          {{ {
+               'c_existed_before_removal': _c_before.stat.exists,
+               'traversal_failed': _traversal_failed,
+               'empty_failed': _empty_failed,
+               'pathless_failed': _pathless_failed,
+               'dupes_failed': _dupes_failed,
+               'baseline_empty_failed': _baseline_empty_failed,
+             } | to_nice_json }}

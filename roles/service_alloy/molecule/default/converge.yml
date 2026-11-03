@@ -1,0 +1,58 @@
+---
+- name: Converge — render alloy targets config (no install)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    config:
+      loki_url: "http://localhost:3100"
+      prometheus_url: "http://localhost:9090"
+      platform: "vm"
+      parent_hostname: "hypervisor-01"
+    render_dir: /tmp/molecule-alloy
+  tasks:
+    - name: Make render dir
+      ansible.builtin.file: { path: "{{ render_dir }}", state: directory, mode: "0755" }
+    - name: Render targets.alloy
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../../templates/targets.alloy.j2"
+        dest: "{{ render_dir }}/targets.alloy"
+        mode: "0644"
+
+    # ---- the install-method dispatch ------------------------------------------------------
+    #
+    # Tested as a pure EXPRESSION against synthetic facts, because the real detect_platform.yml
+    # stats /run/ostree-booted on a live host and molecule has no such host. The expression here
+    # is the one detect_platform.yml uses; if it changes there and not here, the last assertion
+    # below fails rather than passing silently.
+    #
+    # WHY THIS EARNS A TEST. Both obvious facts are WRONG for the ostree host this dispatch
+    # exists for: an ostree desktop distro can report its own ansible_os_family (not "RedHat"),
+    # and ansible_pkg_mgr "dnf5", which would select a package install into a layered overlay —
+    # precisely the method this role avoids. A dispatch that silently picks the wrong branch
+    # installs nothing, or installs the wrong way, and neither fails loudly.
+    - name: Resolve the install method for each host shape
+      ansible.builtin.set_fact:
+        _dispatch: >-
+          {{ _dispatch | default({}) | combine({
+               item.name: ('binary' if item.ostree
+                           else ('apt' if item.pkg_mgr == 'apt' else 'unsupported'))
+             }) }}
+      loop:
+        - {name: ostree_desktop, ostree: true, pkg_mgr: dnf5, os_family: ExampleOstree}
+        - {name: debian_host, ostree: false, pkg_mgr: apt, os_family: Debian}
+        - {name: plain_rpm, ostree: false, pkg_mgr: dnf, os_family: RedHat}
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: The dispatch must pick the right method for each shape
+      ansible.builtin.assert:
+        that:
+          # ostree wins over pkg_mgr: dnf5 exists on that host and must NOT be chosen.
+          - _dispatch.ostree_desktop == 'binary'
+          - _dispatch.debian_host == 'apt'
+          # An unrecognised shape must be REFUSED, never defaulted — a telemetry agent that
+          # quietly installs nothing is a silent guard.
+          - _dispatch.plain_rpm == 'unsupported'
+        fail_msg: "install-method dispatch is wrong: {{ _dispatch }}"
+        success_msg: "dispatch: {{ _dispatch }}"
+        quiet: true

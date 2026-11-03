@@ -1,0 +1,530 @@
+# Drive the REAL role and script end to end against fake_loki.py — see molecule.yml for scope.
+#
+# Every option is passed at INCLUDE level (the `*base` anchor), never as play vars: the generated
+# resolver rebinds a repeat call to the declared defaults, so a play-level value would silently
+# apply only to the first include (RESOLVE-01's re-entry branch, working as designed).
+#
+# Results are collected into _r and written to results.json; verify.yml asserts on that file, so
+# a failing expectation is reported by name rather than as a converge crash.
+---
+- name: Converge
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    _d: /tmp/molecule-config-log-backfill
+    _port: 31987
+    _now: "{{ now().timestamp() | int }}"
+    # Two days ago, whole seconds: inside the 7-day window and well clear of its edge.
+    _t: "{{ _now | int - 172800 }}"
+    _fmt: "%Y-%m-%d %H:%M:%S"
+    _base: &base
+      config_log_backfill_campaign: molecule-1
+      config_log_backfill_loki_url: "http://127.0.0.1:31987"
+      config_log_backfill_rate_fraction: 1.0
+      config_log_backfill_audit_terms: [token]
+      # Short, because the stub's invisibility lasts a fixed number of READS, not 30 minutes.
+      config_log_backfill_verify_wait: 30s
+      config_log_backfill_verify_interval: 1s
+      config_log_backfill_sources:
+        - name: app
+          paths: ["/tmp/molecule-config-log-backfill/logs/*.txt"]
+          labels: { app: x, host: h }
+          live_selector: '{app="x"}'
+          timezone: UTC
+          formats:
+            - regex: '^\[(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]'
+              strptime: "%Y-%m-%d %H:%M:%S"
+          rotated:
+            - regex: '\.previous\.txt$'
+              live: ".txt"
+      config_log_backfill_spot_checks:
+        - labels:
+            { app: x, filename: /tmp/molecule-config-log-backfill/logs/app.txt }
+          contains: dup
+          at: "{{ '%Y-%m-%dT%H:%M:%S+00:00' | strftime(_t | int + 1, utc=true) }}"
+
+  tasks:
+    - name: The seam repair refuses any delete not scoped to a backfill stream
+      # Unit tests for the one function that DELETES from Loki: an empty campaign or an unscoped
+      # (live) selector must raise before Loki is contacted. Run here so CI executes them.
+      ansible.builtin.command:
+        argv: [python3, "{{ playbook_dir }}/../../files/test_repair_scope.py"]
+      changed_when: false
+
+    - name: Pin the clock for the whole scenario
+      # `_now` is lazily re-evaluated on every reference otherwise, and the fixture, the seed and
+      # the role's window must all agree on it.
+      ansible.builtin.set_fact:
+        _now: "{{ _now }}"
+
+    - name: Pin the fixture time
+      ansible.builtin.set_fact:
+        _t: "{{ _t }}"
+        _r: {}
+
+    - name: Clean slate
+      ansible.builtin.file:
+        path: "{{ _d }}"
+        state: absent
+
+    - name: Make the fixture directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop: ["{{ _d }}/logs", "{{ _d }}/state"]
+
+    # --- the fixture ---------------------------------------------------------------------------
+    # app.previous.txt — ROTATED history; must be pushed under app.txt's filename.
+    # app.txt — 2 blank lines and a header with no time (1 unparsed), one line older than the
+    # window, a record with two continuation lines (1 record / 3 lines), the SAME line twice in one
+    # second (both must survive Loki's dedupe), a credential (must be redacted), then the two lines
+    # the "live" stream already holds (must NOT be pushed).
+    - name: Write the rotated file
+      ansible.builtin.copy:
+        dest: "{{ _d }}/logs/app.previous.txt"
+        mode: "0644"
+        content: |
+
+          [{{ _fmt | strftime(_t | int - 100, utc=true) }}] old one
+          [{{ _fmt | strftime(_t | int - 99, utc=true) }}] old two
+
+    - name: Write the live file
+      ansible.builtin.copy:
+        dest: "{{ _d }}/logs/app.txt"
+        mode: "0644"
+        content: |
+
+
+          header without time
+          [{{ _fmt | strftime(_now | int - 777600, utc=true) }}] too old
+          [{{ _fmt | strftime(_t | int, utc=true) }}] first
+            continuation a
+            continuation b
+          [{{ _fmt | strftime(_t | int + 1, utc=true) }}] dup
+          [{{ _fmt | strftime(_t | int + 1, utc=true) }}] dup
+          [{{ _fmt | strftime(_t | int + 2, utc=true) }}] login access_token=fixturefixture ok
+          [{{ _fmt | strftime(_t | int + 3, utc=true) }}] live starts here
+          [{{ _fmt | strftime(_t | int + 4, utc=true) }}] live two
+
+    # THE REAL SHAPE: Alloy's first line of a file that opens with blank lines is BLANK, and it
+    # carries an INGESTION stamp later in the same second as the line's own text. A backfill that
+    # matched against that blank line would never find it, cut at its time, and duplicate the
+    # whole second. Seeded that way here so the fix stays fixed.
+    - name: Seed the stub with the LIVE stream (what Alloy would already have shipped)
+      ansible.builtin.copy:
+        dest: "{{ _d }}/state/seed.json"
+        mode: "0644"
+        content: >-
+          {{ {'streams': [{'stream': {'app': 'x', 'host': 'h', 'filename': _d ~ '/logs/app.txt'},
+              'values': [[((_t | int + 3) * 1000000000 + 500000000) | string, ''],
+                         [((_t | int + 3) * 1000000000 + 600000000) | string,
+                          '[' ~ (_fmt | strftime(_t | int + 3, utc=true)) ~ '] live starts here'],
+                         [((_t | int + 4) * 1000000000) | string,
+                          '[' ~ (_fmt | strftime(_t | int + 4, utc=true)) ~ '] live two']]}]}
+             | to_json }}
+
+    - name: Run the scenario against the stub
+      block:
+        - name: Start the stub Loki
+          ansible.builtin.shell:
+            executable: /bin/bash
+            cmd: >-
+              nohup python3 {{ playbook_dir }}/fake_loki.py {{ _port }} {{ _d }}/state
+              > {{ _d }}/fake_loki.log 2>&1 & echo $!
+          register: _srv
+          changed_when: true
+
+        - name: Wait for it
+          ansible.builtin.wait_for:
+            port: "{{ _port }}"
+            host: 127.0.0.1
+            timeout: 20
+
+        # --- 1. plan only: nothing pushed ------------------------------------------------------
+        - name: "1: plan (apply=false)"
+          ansible.builtin.include_role:
+            name: config_log_backfill
+          vars:
+            <<: *base
+
+        - name: Check that the plan pushed nothing
+          ansible.builtin.stat:
+            path: "{{ _d }}/state/pushes.log"
+          register: _pl1
+
+        - name: Record the plan
+          ansible.builtin.set_fact:
+            _r:
+              "{{ _r | combine({'plan': _clb_plan.totals, 'plan_pushed_anything': _pl1.stat.exists,
+              'plan_redactions': _clb_plan.streams[0].files | map(attribute='redactions') | list,
+              'plan_cut_how': _clb_plan.streams[0].cut.how,
+              'plan_streams': _clb_plan.streams | map(attribute='stream') | list}) }}"
+
+        # --- 2. push + verify --------------------------------------------------------------------
+        - name: Make the stub hide old entries from the next 3 reads, as an unflushed ingester does
+          ansible.builtin.copy:
+            dest: "{{ _d }}/state/hide_reads"
+            content: "3"
+            mode: "0644"
+
+        - name: "2: push (apply=true)"
+          ansible.builtin.include_role:
+            name: config_log_backfill
+          vars:
+            <<: *base
+            config_log_backfill_apply: true
+
+        - name: Read back the redacted line and the duplicated pair from the stub
+          ansible.builtin.uri:
+            url: >-
+              http://127.0.0.1:{{ _port }}/loki/api/v1/query_range?query={{ item.q | urlencode }}&start={{ (_t | int - 200) * 1000000000 }}&end={{ (_t | int + 10) * 1000000000 }}&limit=100&direction=forward
+            return_content: true
+          loop:
+            - k: login
+              q: '{app="x",backfill="molecule-1"} |= "login"'
+            - k: dup
+              q: '{app="x",backfill="molecule-1"} |= "dup"'
+            - k: rotated
+              q: >-
+                {app="x",filename="/tmp/molecule-config-log-backfill/logs/app.txt",backfill="molecule-1"}
+                |= "old one"
+          register: _q
+
+        - name: Record the push
+          ansible.builtin.set_fact:
+            _r:
+              "{{ _r | combine({'push': _clb_push.totals, 'verify_ok': _clb_verify.ok,
+              'verify_attempts': _clb_verify.verify_attempts,
+              'verify': _clb_verify.streams[0].verify, 'spot_ok': _clb_verify.spot_checks | map(attribute='ok') | list,
+              'requests_after_push': lookup('ansible.builtin.file', _d ~ '/state/pushes.log').splitlines() | length,
+              'login_lines': (_q.results[0].content | from_json).data.result | map(attribute='values') | flatten(1) | map('last') | list,
+              'dup_count': (_q.results[1].content | from_json).data.result | map(attribute='values') | flatten(1) | length,
+              'rotated_count': (_q.results[2].content | from_json).data.result | map(attribute='values') | flatten(1) | length}) }}"
+
+        # --- 3. re-run: must push nothing --------------------------------------------------------
+        - name: "3: re-run (apply=true)"
+          ansible.builtin.include_role:
+            name: config_log_backfill
+          vars:
+            <<: *base
+            config_log_backfill_apply: true
+
+        - name: Record the re-run
+          ansible.builtin.set_fact:
+            _r: "{{ _r | combine({'rerun_to_push': _clb_plan.totals.to_push,
+              'rerun_already': _clb_plan.totals.already_in_loki,
+              'rerun_push_ran': _clb_push != {},
+              'rerun_verify_ok': _clb_verify.ok,
+              'requests_after_rerun': lookup('ansible.builtin.file', _d ~ '/state/pushes.log').splitlines() | length}) }}"
+
+        # --- 4. a rejected push must FAIL the play, not report partial success -------------------
+        - name: Append one new in-window line and make the stub refuse every push
+          ansible.builtin.shell:
+            executable: /bin/bash
+            cmd: |
+              printf '[%s] appended later\n' '{{ _fmt | strftime(_t | int + 2, utc=true) }}' >> {{ _d }}/logs/app.txt
+              touch {{ _d }}/state/fail_push
+          changed_when: true
+
+        - name: "4: push against a failing Loki"
+          block:
+            - name: Attempt the push
+              ansible.builtin.include_role:
+                name: config_log_backfill
+              vars:
+                <<: *base
+                config_log_backfill_apply: true
+
+            - name: The push failure did NOT fail the play
+              ansible.builtin.set_fact:
+                _r: "{{ _r | combine({'failed_on_500': false}) }}"
+          rescue:
+            - name: The push failure failed the play, as required
+              ansible.builtin.set_fact:
+                _r:
+                  "{{ _r | combine({'failed_on_500': true, 'error_status': _clb_push.streams[0].push_error.status | default(none),
+                  'failed_500_task': ansible_failed_task.name}) }}"
+
+        # --- 5. resume: exactly the remainder ----------------------------------------------------
+        - name: Let the stub accept pushes again
+          ansible.builtin.file:
+            path: "{{ _d }}/state/fail_push"
+            state: absent
+
+        - name: "5: resume (apply=true)"
+          ansible.builtin.include_role:
+            name: config_log_backfill
+          vars:
+            <<: *base
+            config_log_backfill_apply: true
+
+        - name: Record the resume
+          ansible.builtin.set_fact:
+            _r:
+              "{{ _r | combine({'resume_pushed': _clb_push.totals.pushed, 'resume_verify_ok': _clb_verify.ok,
+              'resume_loki_entries': _clb_verify.streams[0].verify.loki_entries}) }}"
+
+        # --- 6. verify-only never plans or pushes ------------------------------------------------
+        - name: "6: action=verify"
+          ansible.builtin.include_role:
+            name: config_log_backfill
+          vars:
+            <<: *base
+            config_log_backfill_action: verify
+
+        - name: Record the verify-only run
+          ansible.builtin.set_fact:
+            _r:
+              "{{ _r | combine({'verify_only_ok': _clb_verify.ok, 'verify_only_planned': _clb_plan != {},
+              'verify_only_pushed': _clb_push != {}}) }}"
+
+        # --- 6b. a backfilled copy of a LIVE line at the seam: found, refused-safe, repaired -------
+        # The per-stream compare reads only [start, cut) of the backfill stream, so a line pushed
+        # on both sides of the seam is invisible to it. Inject one (a seam duplicate), require
+        # verify to FAIL on it, a dry-run repair to change nothing, and an applied
+        # repair to remove exactly it.
+        - name: Inject a backfilled copy of the live line "live two"
+          ansible.builtin.uri:
+            url: "http://127.0.0.1:{{ _port }}/loki/api/v1/push"
+            method: POST
+            headers:
+              Content-Type: application/json
+            body_format: raw
+            body: >-
+              {{ {'streams': [{'stream': {'app': 'x', 'host': 'h', 'filename': _d ~ '/logs/app.txt',
+                  'backfill': 'molecule-1'},
+                  'values': [[((_t | int + 4) * 1000000000) | string,
+                              '[' ~ (_fmt | strftime(_t | int + 4, utc=true)) ~ '] live two']]}]} | to_json }}
+            status_code: [204]
+
+        - name: "6b: verify must fail on the seam duplicate"
+          block:
+            - name: Attempt the verify
+              ansible.builtin.include_role:
+                name: config_log_backfill
+              vars:
+                <<: *base
+                config_log_backfill_action: verify
+                config_log_backfill_verify_wait: 0s
+
+            - name: The seam duplicate did NOT fail verify
+              ansible.builtin.set_fact:
+                _r: "{{ _r | combine({'seam_failed': false}) }}"
+          rescue:
+            - name: The seam duplicate failed verify, as required
+              ansible.builtin.set_fact:
+                _r: "{{ _r | combine({'seam_failed': true, 'seam_dups': _clb_verify.streams[0].verify.seam_duplicates}) }}"
+
+        - name: "6b: repair_seam dry run"
+          ansible.builtin.include_role:
+            name: config_log_backfill
+          vars:
+            <<: *base
+            config_log_backfill_action: repair_seam
+
+        - name: Record the dry run
+          ansible.builtin.set_fact:
+            _r: "{{ _r | combine({'repair_dry': (_clb_repair_raw.stdout | from_json).repair}) }}"
+
+        - name: "6b: repair_seam applied"
+          ansible.builtin.include_role:
+            name: config_log_backfill
+          vars:
+            <<: *base
+            config_log_backfill_action: repair_seam
+            config_log_backfill_apply: true
+
+        - name: Record the repair
+          ansible.builtin.set_fact:
+            _r: "{{ _r | combine({'repair_applied': (_clb_repair_raw.stdout | from_json).repair}) }}"
+
+        - name: "6b: verify after the repair"
+          ansible.builtin.include_role:
+            name: config_log_backfill
+          vars:
+            <<: *base
+            config_log_backfill_action: verify
+            config_log_backfill_verify_wait: 0s
+
+        - name: Record the post-repair verify
+          ansible.builtin.set_fact:
+            _r: "{{ _r | combine({'post_repair_ok': _clb_verify.ok,
+              'post_repair_seam': _clb_verify.streams[0].verify.seam_duplicates,
+              'post_repair_entries': _clb_verify.streams[0].verify.loki_entries}) }}"
+
+        # --- 6c. a seam duplicate covered by a PENDING delete: warning, not failure --------------
+        # Real Loki holds a delete for delete_request_cancel_period (24h) before it filters
+        # anything, so a correct repair is reported by verify for a day.
+        - name: Make the stub queue deletes without applying them
+          ansible.builtin.copy:
+            dest: "{{ _d }}/state/defer_deletes"
+            content: ""
+            mode: "0644"
+
+        - name: Inject a backfilled copy of the live line "live starts here"
+          ansible.builtin.uri:
+            url: "http://127.0.0.1:{{ _port }}/loki/api/v1/push"
+            method: POST
+            headers:
+              Content-Type: application/json
+            body_format: raw
+            body: >-
+              {{ {'streams': [{'stream': {'app': 'x', 'host': 'h', 'filename': _d ~ '/logs/app.txt',
+                  'backfill': 'molecule-1'},
+                  'values': [[((_t | int + 3) * 1000000000 + 700000000) | string,
+                              '[' ~ (_fmt | strftime(_t | int + 3, utc=true)) ~ '] live starts here']]}]} | to_json }}
+            status_code: [204]
+
+        - name: "6c: queue its deletion (deferred)"
+          ansible.builtin.include_role:
+            name: config_log_backfill
+          vars:
+            <<: *base
+            config_log_backfill_action: repair_seam
+            config_log_backfill_apply: true
+
+        - name: "6c: verify with the delete still pending"
+          ansible.builtin.include_role:
+            name: config_log_backfill
+          vars:
+            <<: *base
+            config_log_backfill_action: verify
+            config_log_backfill_verify_wait: 0s
+
+        - name: Record the pending-delete verify
+          ansible.builtin.set_fact:
+            _r: "{{ _r | combine({'pending_ok': _clb_verify.ok,
+              'pending_seam': _clb_verify.streams[0].verify.seam_duplicates,
+              'pending_covered': _clb_verify.streams[0].verify.seam_pending_delete,
+              'pending_warnings': _clb_verify.warnings | default([])}) }}"
+
+        # A pending request covers ONE second of ONE stream. A duplicate elsewhere in the same
+        # stream is not covered by it and must still FAIL.
+        - name: Inject a second copy, in a second no request covers
+          ansible.builtin.uri:
+            url: "http://127.0.0.1:{{ _port }}/loki/api/v1/push"
+            method: POST
+            headers:
+              Content-Type: application/json
+            body_format: raw
+            body: >-
+              {{ {'streams': [{'stream': {'app': 'x', 'host': 'h', 'filename': _d ~ '/logs/app.txt',
+                  'backfill': 'molecule-1'},
+                  'values': [[((_t | int + 4) * 1000000000 + 200000000) | string,
+                              '[' ~ (_fmt | strftime(_t | int + 4, utc=true)) ~ '] live two']]}]} | to_json }}
+            status_code: [204]
+
+        - name: "6c: an uncovered seam duplicate still fails"
+          block:
+            - name: Attempt the verify
+              ansible.builtin.include_role:
+                name: config_log_backfill
+              vars:
+                <<: *base
+                config_log_backfill_action: verify
+                config_log_backfill_verify_wait: 0s
+
+            - name: The uncovered duplicate did NOT fail verify
+              ansible.builtin.set_fact:
+                _r: "{{ _r | combine({'uncovered_failed': false}) }}"
+          rescue:
+            - name: The uncovered duplicate failed verify, as required
+              ansible.builtin.set_fact:
+                _r: "{{ _r | combine({'uncovered_failed': true,
+                  'uncovered_seam': _clb_verify.streams[0].verify.seam_duplicates,
+                  'uncovered_pending': _clb_verify.streams[0].verify.seam_pending_delete}) }}"
+
+        - name: Stop deferring, for the steps below
+          ansible.builtin.file:
+            path: "{{ _d }}/state/defer_deletes"
+            state: absent
+
+        - name: "6c: clean both copies up for the steps below"
+          ansible.builtin.include_role:
+            name: config_log_backfill
+          vars:
+            <<: *base
+            config_log_backfill_action: repair_seam
+            config_log_backfill_apply: true
+
+        # --- 7. verify must FAIL when Loki and the files disagree ---------------------------------
+        - name: Change one already-pushed line on disk
+          ansible.builtin.replace:
+            path: "{{ _d }}/logs/app.previous.txt"
+            regexp: "old one"
+            replace: "old ONE"
+
+        - name: "7: verify against a file that no longer matches Loki"
+          block:
+            - name: Attempt the verify
+              ansible.builtin.include_role:
+                name: config_log_backfill
+              vars:
+                <<: *base
+                config_log_backfill_action: verify
+                config_log_backfill_verify_wait: 0s
+
+            - name: The mismatch did NOT fail the play
+              ansible.builtin.set_fact:
+                _r: "{{ _r | combine({'mismatch_failed': false}) }}"
+          rescue:
+            - name: The mismatch failed the play, as required
+              ansible.builtin.set_fact:
+                _r:
+                  "{{ _r | combine({'mismatch_failed': true, 'mismatch_task': ansible_failed_task.name,
+                  'mismatch_verify': _clb_verify.streams[0].verify}) }}"
+
+        # --- 7b. rc 0 with NO report must fail, not pass -----------------------------------------
+        # An undeserialisable module result arrives with rc 0 and no stdout, and an
+        # rc-only failed_when turned it into "ok". `true` reproduces that shape exactly.
+        - name: "7b: an interpreter that exits 0 and prints nothing"
+          block:
+            - name: Attempt a verify with it
+              ansible.builtin.include_role:
+                name: config_log_backfill
+              vars:
+                <<: *base
+                config_log_backfill_action: verify
+                config_log_backfill_python: "true"
+
+            - name: The empty result did NOT fail the play
+              ansible.builtin.set_fact:
+                _r: "{{ _r | combine({'empty_result_failed': false}) }}"
+          rescue:
+            - name: The empty result failed the play, as required
+              ansible.builtin.set_fact:
+                _r: "{{ _r | combine({'empty_result_failed': true, 'empty_result_task': ansible_failed_task.name}) }}"
+
+        # --- 8. the campaign guard ---------------------------------------------------------------
+        - name: "8: a path-shaped campaign id is refused"
+          block:
+            - name: Attempt it
+              ansible.builtin.include_role:
+                name: config_log_backfill
+              vars:
+                <<: *base
+                config_log_backfill_campaign: "../history"
+
+            - name: The campaign guard did NOT fire
+              ansible.builtin.set_fact:
+                _r: "{{ _r | combine({'bad_campaign_refused': false}) }}"
+          rescue:
+            - name: The campaign guard fired, as required
+              ansible.builtin.set_fact:
+                _r: "{{ _r | combine({'bad_campaign_refused': true}) }}"
+
+      always:
+        - name: Stop the stub
+          ansible.builtin.command:
+            argv: [kill, "{{ _srv.stdout | trim }}"]
+          changed_when: true
+          failed_when: false
+          when: _srv.stdout is defined
+
+        - name: Write the results for verify.yml
+          ansible.builtin.copy:
+            dest: "{{ _d }}/results.json"
+            content: "{{ _r | to_nice_json }}"
+            mode: "0644"

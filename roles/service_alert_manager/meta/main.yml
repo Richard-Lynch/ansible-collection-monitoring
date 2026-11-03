@@ -1,0 +1,12 @@
+---
+galaxy_info:
+  role_name: service_alert_manager
+  namespace: richard_lynch
+  author: Richard Lynch
+  description: >-
+    Deploy Prometheus Alertmanager routing to Apprise, with Alertmanager-rendered notifications and
+    an optional external dead-man heartbeat.
+  license: GPL-3.0-or-later
+  min_ansible_version: "2.19"
+  galaxy_tags: [alertmanager, prometheus, monitoring, alerting]
+dependencies: []

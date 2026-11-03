@@ -1,0 +1,106 @@
+---
+- name: Verify loki compose + config invariants
+  hosts: localhost
+  gather_facts: false
+  vars:
+    render_dir: /tmp/molecule-loki
+  tasks:
+    - name: Read rendered files
+      ansible.builtin.slurp: { src: "{{ item }}" }
+      loop:
+        - "{{ render_dir }}/docker-compose.yml"
+        - "{{ render_dir }}/config/loki-config.yml"
+        - "{{ render_dir }}/config/loki-config-noruler.yml"
+      register: _files
+    - name: Decode
+      ansible.builtin.set_fact:
+        compose: "{{ _files.results[0].content | b64decode }}"
+        config: "{{ _files.results[1].content | b64decode }}"
+        config_noruler: "{{ _files.results[2].content | b64decode }}"
+
+    - name: Both rendered configs must be valid YAML
+      # Rendering without a parse check only proves the TEMPLATE ran, not that it produced
+      # loadable config. A stray indentation in the ruler stanza would render happily and make
+      # Loki refuse to start.
+      ansible.builtin.assert:
+        that:
+          - (config | from_yaml) is mapping
+          - (config_noruler | from_yaml) is mapping
+        fail_msg: "a rendered loki config is not parseable YAML."
+
+    - name: Compose uses grafana/loki + shared network
+      ansible.builtin.assert:
+        that:
+          - "'grafana/loki:3.5.5' in compose"     # correct image (grafana/loki, not loki/loki)
+          - "'external: true' in compose"
+          - "'monitoring:' in compose"
+        fail_msg: "loki compose wrong image / not on shared network."
+
+    - name: Config is tsdb + retention-bounded + compacted
+      ansible.builtin.assert:
+        that:
+          - "'store: tsdb' in config"
+          - "'retention_period: 768h' in config"
+          - "'retention_enabled: true' in config"    # compactor actually deletes → bounded disk
+        fail_msg: "loki config missing tsdb / retention / compactor-enforcement."
+        success_msg: "loki OK — grafana/loki image, tsdb, retention-compacted, shared network."
+
+    # --- the ruler: the mechanism for log-based alerting -----------------------------------------
+    - name: The ruler is provisioned, and points at Alertmanager
+      vars:
+        _ruler: "{{ (config | from_yaml).ruler }}"
+      ansible.builtin.assert:
+        that:
+          - (config | from_yaml).ruler is defined
+          - _ruler.alertmanager_url | default('') | length > 0
+          - _ruler.storage.type == 'local'
+          - _ruler.enable_api | bool
+        fail_msg: >-
+          The ruler stanza is missing or incomplete. Without it Loki answers HTTP 400 on
+          /loki/api/v1/rules and NOTHING can alert on a log signal.
+        success_msg: "Ruler provisioned, notifying {{ _ruler.alertmanager_url }}."
+
+    - name: HARD GATE — rule_path must NOT be the rules source directory
+      # `rule_path` is the ruler's SCRATCH directory and Loki CLEANS IT ON STARTUP;
+      # `storage.local.directory` is where rules are read from. Setting both to /loki/rules reads as
+      # obviously correct (one rules directory) and makes Loki DELETE ITS OWN RULES on every
+      # restart, after passing every other check. Asserted on the RENDERED config rather
+      # than on the role's variables, because the rendered pair is what Loki actually reads.
+      vars:
+        _ruler: "{{ (config | from_yaml).ruler }}"
+      ansible.builtin.assert:
+        that:
+          - _ruler.rule_path != _ruler.storage.local.directory
+          - not (_ruler.storage.local.directory ~ '/').startswith(_ruler.rule_path ~ '/')
+        fail_msg: >-
+          rule_path ({{ _ruler.rule_path }}) and storage.local.directory
+          ({{ _ruler.storage.local.directory }}) must be DIFFERENT directories, and the rules
+          source must not sit inside the scratch path. Loki cleans rule_path on startup, so
+          conflating them deletes every installed rule on every restart.
+        success_msg: >-
+          Ruler paths distinct: rules read from {{ _ruler.storage.local.directory }},
+          scratch at {{ _ruler.rule_path }}.
+
+    - name: Log alerts are distinguishable from metric alerts at Alertmanager
+      # external_labels is the only way a delivered log alert can be told apart from a Prometheus
+      # metric alert — they arrive on the same route. A rule's OWN labels do not propagate.
+      ansible.builtin.assert:
+        that:
+          - (config | from_yaml).ruler.external_labels.alert_source | default('') == 'loki'
+        fail_msg: "the ruler does not tag its alerts with alert_source=loki."
+
+    - name: Disabling the ruler removes the stanza entirely
+      # The other branch of the template's {% if %}. A conditional that has only ever rendered one
+      # way can hide a syntax error in the other, and `loki_ruler_enabled: false` is a documented
+      # option — so the off path has to produce valid config too, not just omit a few keys.
+      ansible.builtin.assert:
+        that:
+          - (config_noruler | from_yaml).ruler is not defined
+          - (config_noruler | from_yaml).schema_config is defined
+        fail_msg: >-
+          With loki_ruler_enabled=false the config must contain no ruler stanza while remaining a
+          complete, valid Loki config.
+        success_msg: "Ruler cleanly absent when disabled."
+
+    - name: Clean up
+      ansible.builtin.file: { path: "{{ render_dir }}", state: absent }

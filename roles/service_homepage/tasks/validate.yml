@@ -1,0 +1,119 @@
+---
+# Validate the dashboard config BEFORE anything is deployed: render each file on the controller and
+# parse it. Every check here fails on a config homepage would render wrongly without an error — a
+# mis-indented Jinja guard, a section with no layout entry, a card with no link — so a deploy that
+# passes them cannot ship a silently broken page. Entered directly by the molecule scenario.
+
+- name: Locate the config templates to validate
+  ansible.builtin.set_fact:
+    _homepage_cfg_files:
+      services: "{{ _homepage_config_src }}/services.yaml"
+      settings: "{{ _homepage_config_src }}/settings.yaml"
+      bookmarks: "{{ _homepage_config_src }}/bookmarks.yaml"
+
+- name: Render services, settings and bookmarks on the controller
+  # no_log: services.yaml carries any widget API keys the caller supplied.
+  no_log: true
+  ansible.builtin.set_fact:
+    _homepage_services: >-
+      {{ lookup('ansible.builtin.template', lookup('ansible.builtin.first_found',
+                [_homepage_cfg_files.services ~ '.j2', _homepage_cfg_files.services]))
+         | from_yaml }}
+    _homepage_settings: >-
+      {{ lookup('ansible.builtin.template', lookup('ansible.builtin.first_found',
+                [_homepage_cfg_files.settings ~ '.j2', _homepage_cfg_files.settings]))
+         | from_yaml }}
+    _homepage_bookmarks: >-
+      {{ lookup('ansible.builtin.template', lookup('ansible.builtin.first_found',
+                [_homepage_cfg_files.bookmarks ~ '.j2', _homepage_cfg_files.bookmarks]))
+         | from_yaml }}
+
+- name: HARD GATE — the rendered config must parse to the shapes homepage expects
+  # Substring checks cannot tell a VALID services.yaml from one that merely contains the right
+  # text: a Jinja guard emitting a block at the wrong indent still contains every expected string
+  # while producing a file homepage cannot parse.
+  ansible.builtin.assert:
+    that:
+      - _homepage_services is sequence
+      - _homepage_settings is mapping
+      - _homepage_bookmarks is sequence
+    fail_msg: >-
+      A rendered homepage config is not the expected YAML shape (services and bookmarks: a list;
+      settings: a mapping) — the usual cause is a mis-indented {% raw %}{% if %}{% endraw %} guard.
+    quiet: true
+
+- name: Flatten every service card
+  # Structure: [ {Section: [ {Name: {href: ...}}, ... ]}, ... ].
+  ansible.builtin.set_fact:
+    _homepage_sections: "{{ _homepage_services | map('first') | list }}"
+    _homepage_cards: >-
+      {{ _homepage_services
+         | map('dict2items') | map('first') | map(attribute='value')
+         | flatten(levels=1)
+         | map('dict2items') | map('first') | list }}
+
+- name: HARD GATE — every services section has a settings layout entry (when a layout is declared)
+  # Homepage renders a section with no layout entry unstyled and in arbitrary order, which looks
+  # like a broken dashboard rather than a config error. Derived from the RENDERED files, so adding a
+  # section to one file and forgetting the other fails here.
+  ansible.builtin.assert:
+    that:
+      - (_homepage_sections | sort) == (_homepage_settings.layout.keys() | list | sort)
+    fail_msg: >-
+      services.yaml sections {{ _homepage_sections | sort }} do not match settings.yaml layout keys
+      {{ _homepage_settings.layout.keys() | list | sort }}. Add the section to BOTH files.
+    quiet: true
+  when: _homepage_settings.layout is defined
+
+- name: HARD GATE — every service card carries a non-empty href
+  ansible.builtin.assert:
+    that:
+      - _homepage_cards | rejectattr('value.href', 'defined') | list | length == 0
+      - _homepage_cards | selectattr('value.href', 'defined')
+        | selectattr('value.href', 'match', '^\\s*$') | list | length == 0
+    fail_msg: >-
+      These cards have a missing or blank href:
+      {{ (_homepage_cards | rejectattr('value.href', 'defined') | map(attribute='key') | list)
+         + (_homepage_cards | selectattr('value.href', 'defined')
+            | selectattr('value.href', 'match', '^\\s*$') | map(attribute='key') | list) }}
+    quiet: true
+
+- name: HARD GATE — no card links a host the caller has declared dead
+  # Checked against the PARSED hrefs, not the raw text, so a template comment naming an excluded
+  # host (to explain why it is excluded) does not trip it. Only a real link counts.
+  vars:
+    _homepage_dead_re: "{{ '(?:' ~ (homepage_forbidden_href_patterns | join(')|(?:')) ~ ')' }}"
+    _homepage_dead: >-
+      {{ _homepage_cards | selectattr('value.href', 'defined') | map(attribute='value.href')
+         | select('search', _homepage_dead_re) | list }}
+  ansible.builtin.assert:
+    that:
+      - _homepage_dead | length == 0
+    fail_msg: >-
+      These card links match homepage_forbidden_href_patterns (hosts marked dead): {{ _homepage_dead }}
+    quiet: true
+  when: homepage_forbidden_href_patterns | length > 0
+
+- name: Flatten every bookmark
+  # Bookmarks nest one level deeper than services (group -> name -> LIST of one mapping), which is
+  # easy to get wrong by analogy with services.yaml and fails by rendering an empty group.
+  ansible.builtin.set_fact:
+    _homepage_bookmark_entries: >-
+      {{ _homepage_bookmarks | map('dict2items') | flatten | map(attribute='value') | flatten
+         | map('dict2items') | flatten | map(attribute='value') | flatten }}
+
+- name: HARD GATE — every bookmark carries an href and an icon, and none matches a service pattern
+  ansible.builtin.assert:
+    that:
+      - _homepage_bookmark_entries | rejectattr('href', 'defined') | list | length == 0
+      - _homepage_bookmark_entries | selectattr('href', 'defined') | selectattr('href', 'equalto', '') | list | length == 0
+      - _homepage_bookmark_entries | rejectattr('icon', 'defined') | list | length == 0
+      - >-
+        homepage_bookmarks_forbidden_href_pattern | length == 0
+        or (_homepage_bookmark_entries | map(attribute='href')
+            | select('search', homepage_bookmarks_forbidden_href_pattern) | list | length == 0)
+    fail_msg: >-
+      bookmarks.yaml is malformed, a bookmark is missing href/icon, or a bookmark links a host
+      matching homepage_bookmarks_forbidden_href_pattern (which belongs in services.yaml as a card,
+      with its siteMonitor).
+    quiet: true

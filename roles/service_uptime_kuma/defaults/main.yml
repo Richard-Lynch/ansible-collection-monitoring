@@ -1,0 +1,48 @@
+---
+# AUTO-GENERATED defaults file — DO NOT EDIT.
+#
+# Source of truth: roles/service_uptime_kuma/meta/argument_specs.py
+# Regenerate:      venv/bin/python tools/argspec/cli.py x generate service_uptime_kuma
+#
+# Edits here are silently overwritten on the next generation. To change a value or its
+# documentation, change the OptionSpec in the source file above — descriptions there
+# are emitted as the comments in this file.
+# Entrypoint:      main
+
+# Container name.
+uptime_kuma_container_name__default: uptime-kuma
+
+# Image, PINNED to a specific tag — never 'latest' (and not the floating '2',
+# which moves to whatever 2.x is newest). Bump deliberately.
+uptime_kuma_image__default: louislam/uptime-kuma:2.5.3
+
+# Directory holding the compose file on the target host.
+uptime_kuma_deploy_dir__default: /opt/uptime-kuma
+
+# Bind mount for Kuma's SQLite DB + uploads. A named Docker volume would be
+# equally valid; a bind mount is used so the data is visible/backuppable from
+# the host without reaching into the volume store.
+uptime_kuma_data_dir__default: /opt/uptime-kuma/data
+
+# Host port the web UI (+ push-monitor HTTP endpoint) listens on.
+uptime_kuma_host_port__default: 3001
+
+# Interface the host port is published on. Defaults to loopback ONLY — a fresh
+# install has NO admin account until first-run setup completes, so an
+# unclaimed Kuma on a reachable interface (worst case a public host with no
+# host firewall) can be claimed by whoever finds it first. Takes effect only
+# together with the explicit uptime_kuma_publish_publicly flag below, so the
+# publish decision stays a single, auditable switch. See the role README for
+# the tunnel alternative.
+uptime_kuma_bind_address__default: 127.0.0.1
+
+# Explicit opt-in to bind the UI to 0.0.0.0 instead of 127.0.0.1. Leave false
+# and front Kuma with a tunnel/reverse proxy instead unless you have a
+# specific reason to expose it directly and have completed first-run admin
+# setup immediately after deploy.
+uptime_kuma_publish_publicly__default: false
+
+# Docker network mode. 'bridge' (default) keeps the container isolated from
+# the host's other ports, so it cannot collide with another service that uses
+# 'host' networking on the same box.
+uptime_kuma_network_mode__default: bridge

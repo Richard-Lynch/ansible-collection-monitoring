@@ -1,0 +1,57 @@
+---
+# AUTO-GENERATED defaults resolver — DO NOT EDIT.
+#
+# Source of truth: roles/config_log_alerts/meta/argument_specs.py
+# Regenerate:      venv/bin/python tools/argspec/cli.py x generate config_log_alerts
+#
+# Edits here are silently overwritten on the next generation. To change a value or its
+# documentation, change the OptionSpec in the source file above — descriptions there
+# are emitted as the comments in this file.
+
+# Binds every declared option to its generated default, so a caller-supplied value
+# wins and an unsupplied one falls back rather than evaluating Undefined.
+#
+# Include this FIRST from every entrypoint:
+#   - ansible.builtin.include_tasks: _resolve_defaults.yml
+#
+# Role-specific setup logic belongs in tasks/setup_vars.yml, NOT here — this file is
+# overwritten on every generation.
+#
+# TWO BRANCHES, because `set_fact` persists for the whole play. A role invoked twice in
+# one play would otherwise see its OWN leftover facts on the second call, so a later
+# caller that omitted an option silently inherited the earlier caller's value instead of
+# the declared default. On a repeat call this ignores the role's own facts and rebinds
+# the defaults; an include-level `vars:` shadows the fact, so a value the caller DID
+# supply this time still wins. Roles called once per play only ever run the first branch.
+
+- name: Resolve declared options over their generated defaults
+  ansible.builtin.set_fact:
+    config_log_alerts_groups: "{{ config_log_alerts_groups | default(config_log_alerts_groups__default) if config_log_alerts_groups__default is defined else config_log_alerts_groups | default(omit) }}"
+    config_log_alerts_state: "{{ config_log_alerts_state | default(config_log_alerts_state__default) if config_log_alerts_state__default is defined else config_log_alerts_state | default(omit) }}"
+    config_log_alerts_container: "{{ config_log_alerts_container | default(config_log_alerts_container__default) if config_log_alerts_container__default is defined else config_log_alerts_container | default(omit) }}"
+    config_log_alerts_tenant: "{{ config_log_alerts_tenant | default(config_log_alerts_tenant__default) if config_log_alerts_tenant__default is defined else config_log_alerts_tenant | default(omit) }}"
+    config_log_alerts_rule_path: "{{ config_log_alerts_rule_path | default(config_log_alerts_rule_path__default) if config_log_alerts_rule_path__default is defined else config_log_alerts_rule_path | default(omit) }}"
+    config_log_alerts_url: "{{ config_log_alerts_url | default(config_log_alerts_url__default) if config_log_alerts_url__default is defined else config_log_alerts_url | default(omit) }}"
+    config_log_alerts_restart_on_remove: "{{ config_log_alerts_restart_on_remove | default(config_log_alerts_restart_on_remove__default) if config_log_alerts_restart_on_remove__default is defined else config_log_alerts_restart_on_remove | default(omit) }}"
+    config_log_alerts_compose_dir: "{{ config_log_alerts_compose_dir | default(config_log_alerts_compose_dir__default) if config_log_alerts_compose_dir__default is defined else config_log_alerts_compose_dir | default(omit) }}"
+    config_log_alerts_validate: "{{ config_log_alerts_validate | default(config_log_alerts_validate__default) if config_log_alerts_validate__default is defined else config_log_alerts_validate | default(omit) }}"
+    config_log_alerts_verify_matches: "{{ config_log_alerts_verify_matches | default(config_log_alerts_verify_matches__default) if config_log_alerts_verify_matches__default is defined else config_log_alerts_verify_matches | default(omit) }}"
+  when: not (_config_log_alerts__argspec_resolved | default(false))
+
+- name: Rebind the defaults on a repeat call, ignoring this role's own leftover facts
+  ansible.builtin.set_fact:
+    config_log_alerts_groups: "{{ config_log_alerts_groups__default if config_log_alerts_groups__default is defined else config_log_alerts_groups | default(omit) }}"
+    config_log_alerts_state: "{{ config_log_alerts_state__default if config_log_alerts_state__default is defined else config_log_alerts_state | default(omit) }}"
+    config_log_alerts_container: "{{ config_log_alerts_container__default if config_log_alerts_container__default is defined else config_log_alerts_container | default(omit) }}"
+    config_log_alerts_tenant: "{{ config_log_alerts_tenant__default if config_log_alerts_tenant__default is defined else config_log_alerts_tenant | default(omit) }}"
+    config_log_alerts_rule_path: "{{ config_log_alerts_rule_path__default if config_log_alerts_rule_path__default is defined else config_log_alerts_rule_path | default(omit) }}"
+    config_log_alerts_url: "{{ config_log_alerts_url__default if config_log_alerts_url__default is defined else config_log_alerts_url | default(omit) }}"
+    config_log_alerts_restart_on_remove: "{{ config_log_alerts_restart_on_remove__default if config_log_alerts_restart_on_remove__default is defined else config_log_alerts_restart_on_remove | default(omit) }}"
+    config_log_alerts_compose_dir: "{{ config_log_alerts_compose_dir__default if config_log_alerts_compose_dir__default is defined else config_log_alerts_compose_dir | default(omit) }}"
+    config_log_alerts_validate: "{{ config_log_alerts_validate__default if config_log_alerts_validate__default is defined else config_log_alerts_validate | default(omit) }}"
+    config_log_alerts_verify_matches: "{{ config_log_alerts_verify_matches__default if config_log_alerts_verify_matches__default is defined else config_log_alerts_verify_matches | default(omit) }}"
+  when: _config_log_alerts__argspec_resolved | default(false)
+
+- name: Record that this role has resolved its options in this play
+  ansible.builtin.set_fact:
+    _config_log_alerts__argspec_resolved: true

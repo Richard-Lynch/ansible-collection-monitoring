@@ -1,0 +1,33 @@
+---
+# service_uptime_kuma — deploy an Uptime Kuma instance (see role README).
+#
+# This role only renders config + converges the compose stack. It deliberately does NOT create an
+# admin account or any credential — Kuma's first-run setup (claiming the instance) is a manual,
+# one-time step a human completes in the browser immediately after first deploy.
+
+- name: Setup vars
+  ansible.builtin.include_tasks: setup_vars.yml
+
+- name: Ensure the data directory exists (bind mount target)
+  ansible.builtin.file:
+    path: "{{ uptime_kuma_data_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Store vars
+  ansible.builtin.set_fact:
+    uptime_kuma_files: "{{ role_path }}/files"
+
+- name: Deploy Uptime Kuma compose file
+  ansible.builtin.include_role:
+    name: richard_lynch.common.deployment_config
+  vars:
+    deployment_config_source: "{{ uptime_kuma_files }}"
+    deployment_config_destination: "{{ uptime_kuma_deploy_dir }}"
+
+- name: Deploy Uptime Kuma stack
+  community.docker.docker_compose_v2:
+    project_src: "{{ uptime_kuma_deploy_dir }}"
+    state: present
+    recreate: auto
+  register: uptime_kuma_compose

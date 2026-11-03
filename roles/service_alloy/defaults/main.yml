@@ -1,0 +1,21 @@
+---
+# AUTO-GENERATED defaults file — DO NOT EDIT.
+#
+# Source of truth: roles/service_alloy/meta/argument_specs.py
+# Regenerate:      venv/bin/python tools/argspec/cli.py x generate service_alloy
+#
+# Edits here are silently overwritten on the next generation. To change a value or its
+# documentation, change the OptionSpec in the source file above — descriptions there
+# are emitted as the comments in this file.
+# Entrypoint:      main
+
+alloy_config__default:
+  logs_journal:
+    max_age: 24h0m0s
+  metrics_docker:
+    containerd_host: unix:///run/containerd/containerd.sock
+    storage_duration: 5m
+    scrape_interval: 10s
+  metrics_system:
+    scrape_interval: 15s
+    textfile_directory: /var/lib/node_exporter/textfile_collector

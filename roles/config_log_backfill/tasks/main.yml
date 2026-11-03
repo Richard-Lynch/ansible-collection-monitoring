@@ -1,0 +1,269 @@
+---
+# config_log_backfill — push historical log FILES into Loki at their original timestamps.
+#
+# Runs on the host that HOLDS the files. Three invocations of one script, all sharing one `now`
+# so their windows agree to the second:
+#   plan   — always. Parses, reads Loki's limits and existing data, reports what would be pushed.
+#   push   — only with config_log_backfill_apply=true. Ascending, batched, paced; stops at the
+#            first non-2xx and fails the play.
+#   verify — after every push, or alone with config_log_backfill_action=verify. Reads the window
+#            back from Loki's QUERY API and compares it line-for-line with the files.
+- name: Resolve declared options over their generated defaults
+  ansible.builtin.include_tasks: _resolve_defaults.yml
+
+- name: Validate the caller's input
+  # Each of these presents later as something misleading if it gets through: a campaign id with
+  # a path character in it, a source with no timestamp group (every line "unparsed"), or a
+  # caller labelling with the backfill label itself (the live/backfill split collapses).
+  ansible.builtin.assert:
+    that:
+      - config_log_backfill_campaign is match('^[a-z0-9][a-z0-9._-]{0,62}$')
+      - config_log_backfill_loki_url is match('^https?://')
+      - config_log_backfill_sources | length > 0
+      - config_log_backfill_sources | rejectattr('name', 'defined') | list | length == 0
+      - config_log_backfill_sources | rejectattr('paths', 'defined') | list | length == 0
+      - config_log_backfill_sources | rejectattr('labels', 'defined') | list | length == 0
+      - config_log_backfill_sources | rejectattr('formats', 'defined') | list | length == 0
+      - >-
+        config_log_backfill_sources | map(attribute='formats') | flatten
+        | rejectattr('regex', 'search', 'P<ts>') | list | length == 0
+      - >-
+        config_log_backfill_sources | map(attribute='labels') | selectattr(config_log_backfill_label, 'defined')
+        | list | length == 0
+    fail_msg: >-
+      config_log_backfill input is invalid: campaign must match [a-z0-9][a-z0-9._-]* (got
+      '{{ config_log_backfill_campaign }}'), loki_url must be http(s), and every source needs
+      name, paths, labels and formats whose regex has a (?P<ts>...) group; no source may set the
+      '{{ config_log_backfill_label }}' label itself.
+    quiet: true
+
+- name: Fix the run's clock and build the script config
+  # Durations and the end timestamp are passed as written and parsed by the script (Go-style
+  # durations, like Loki's own), so there is one parser and it is tested.
+  ansible.builtin.set_fact:
+    _clb_cfg:
+      campaign: "{{ config_log_backfill_campaign }}"
+      loki_url: "{{ config_log_backfill_loki_url | regex_replace('/+$', '') }}"
+      backfill_label: "{{ config_log_backfill_label }}"
+      # EPOCH SECONDS from now() — not now(utc=true).timestamp(), which reads a NAIVE UTC value
+      # as local time and is off by the UTC offset wherever local time is not UTC.
+      now: "{{ now().timestamp() | int }}"
+      since: "{{ config_log_backfill_since }}"
+      max_age_margin: "{{ config_log_backfill_max_age_margin }}"
+      end: "{{ config_log_backfill_end }}"
+      batch_bytes: "{{ config_log_backfill_batch_bytes | int }}"
+      rate_fraction: "{{ config_log_backfill_rate_fraction | float }}"
+      spot_checks: "{{ config_log_backfill_spot_checks }}"
+      redact_defaults: "{{ config_log_backfill_redact }}"
+      audit_terms: "{{ config_log_backfill_audit_terms }}"
+      verify_wait: "{{ config_log_backfill_verify_wait }}"
+      verify_interval: "{{ config_log_backfill_verify_interval }}"
+      sources: "{{ config_log_backfill_sources }}"
+
+- name: Forget any previous call's results
+  # set_fact outlives the include, so a SECOND call in one play (or a caller reading these
+  # afterwards) would otherwise see the first call's push and verification and could pass a gate
+  # on them. The gates below key off this run's registered results, and these are reset so a
+  # caller never reads stale ones either.
+  ansible.builtin.set_fact:
+    _clb_plan: {}
+    _clb_push: {}
+    _clb_verify: {}
+
+- name: Run the backfill script
+  block:
+    - name: Make a private work directory on the target
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: config_log_backfill.
+      register: _clb_tmp
+      # Scratch, removed in `always:` — the run leaves the host as it found it, so it is not a change.
+      changed_when: false
+
+    - name: Ship the script
+      ansible.builtin.copy:
+        src: loki_backfill.py
+        dest: "{{ _clb_tmp.path }}/loki_backfill.py"
+        mode: "0700"
+      changed_when: false
+
+    - name: Write one config per mode
+      # Durations are parsed by the script (Go-style, like Loki's own), so the strings pass
+      # through unchanged.
+      ansible.builtin.copy:
+        # Only the repair mode reads `apply` (its dry run and its delete are one code path);
+        # push is gated by the role choosing whether to RUN it.
+        content: >-
+          {{ _clb_cfg | combine({'mode': item, 'apply': (item == 'repair' and config_log_backfill_apply | bool)})
+             | to_nice_json }}
+        dest: "{{ _clb_tmp.path }}/{{ item }}.json"
+        mode: "0600"
+      changed_when: false
+      loop: [plan, push, verify, repair]
+
+    # --- repair_seam: find (and with apply, delete) backfilled copies of live lines ------------
+    - name: Seam repair — backfilled copies of lines Alloy also shipped
+      ansible.builtin.command:
+        argv:
+          - "{{ config_log_backfill_python }}"
+          - "{{ _clb_tmp.path }}/loki_backfill.py"
+          - "{{ _clb_tmp.path }}/repair.json"
+      register: _clb_repair_raw
+      changed_when: >-
+        _clb_repair_raw.rc in [0, 2]
+        and ((_clb_repair_raw.stdout | from_json).repair | default([]) | selectattr('action', 'match', 'deleted') | list | length > 0)
+      failed_when: >-
+        _clb_repair_raw.rc is not defined or _clb_repair_raw.rc not in [0, 2]
+        or (_clb_repair_raw.stdout | default('')) is not search('"summary"')
+      when: config_log_backfill_action == 'repair_seam'
+
+    - name: Seam repair report
+      ansible.builtin.debug:
+        msg: "{{ (_clb_repair_raw.stdout | from_json).summary }}"
+      when: _clb_repair_raw is not skipped
+
+    - name: HARD GATE — every seam second was either clean, deletable, or deleted
+      ansible.builtin.assert:
+        that: ["(_clb_repair_raw.stdout | from_json).ok | bool"]
+        fail_msg: "Seam repair failed: {{ (_clb_repair_raw.stdout | from_json).errors }}"
+        success_msg: >-
+          {{ (_clb_repair_raw.stdout | from_json).repair | default([]) | length }} seam second(s)
+          {{ 'deleted' if config_log_backfill_apply | bool else 'found (set config_log_backfill_apply=true to delete)' }}.
+          Loki applies deletes asynchronously; run action=verify to confirm the seam is clean
+          rather than trusting the 204.
+        quiet: true
+      when: _clb_repair_raw is not skipped
+
+    # --- plan: always --------------------------------------------------------------------------
+    - name: Plan — what would be pushed
+      ansible.builtin.command:
+        argv:
+          - "{{ config_log_backfill_python }}"
+          - "{{ _clb_tmp.path }}/loki_backfill.py"
+          - "{{ _clb_tmp.path }}/plan.json"
+      register: _clb_plan_raw
+      changed_when: false
+      # rc 2 = a check failed and the report says which; anything else is a crash.
+      # NOT just `rc not in [0, 2]`. A module whose result cannot be DESERIALISED comes back with
+      # rc 0 and no stdout ("Module result deserialization failed"), and an rc-only failed_when
+      # OVERRIDES that failure into ok — e.g. when a login shell's terminal escape queries precede
+      # an async wrapper's JSON. Require the report too.
+      failed_when: >-
+        _clb_plan_raw.rc is not defined or _clb_plan_raw.rc not in [0, 2]
+        or (_clb_plan_raw.stdout | default('')) is not search('"summary"')
+      when: config_log_backfill_action == 'backfill'
+
+    - name: Parse the plan
+      ansible.builtin.set_fact:
+        _clb_plan: "{{ _clb_plan_raw.stdout | from_json }}"
+      when: config_log_backfill_action == 'backfill'
+
+    - name: Plan report
+      ansible.builtin.debug:
+        msg: "{{ _clb_plan.summary }}"
+      when: config_log_backfill_action == 'backfill'
+
+    - name: HARD GATE — the plan must be clean before anything is pushed
+      # Label drift (the backfill would not be found by the live selector), a Loki read error or
+      # an over-long label set all mean the push would be wrong or invisible.
+      ansible.builtin.assert:
+        that: [_clb_plan.ok | bool]
+        fail_msg: "Plan failed — nothing pushed: {{ _clb_plan.errors }}"
+        success_msg: >-
+          {{ _clb_plan.totals.to_push }} record(s) to push across {{ _clb_plan.totals.streams }}
+          stream(s); {{ _clb_plan.totals.already_in_loki }} already in Loki;
+          {{ _clb_plan.totals.unparsed_lines }} unparsed line(s).
+          {{ 'Set config_log_backfill_apply=true to push.' if not config_log_backfill_apply | bool else 'PUSHING.' }}
+        quiet: true
+      when: config_log_backfill_action == 'backfill'
+
+    # --- push: only when applied ----------------------------------------------------------------
+    - name: Push
+      ansible.builtin.command:
+        argv:
+          - "{{ config_log_backfill_python }}"
+          - "{{ _clb_tmp.path }}/loki_backfill.py"
+          - "{{ _clb_tmp.path }}/push.json"
+      register: _clb_push_raw
+      # Honest: a run that found everything already in Loki pushes nothing and reports ok.
+      # `and` short-circuits, so a crash (rc 1, no JSON) reaches failed_when instead of a
+      # templating error here.
+      changed_when: >-
+        _clb_push_raw.rc in [0, 2] and (_clb_push_raw.stdout | from_json).totals.pushed | int > 0
+      failed_when: >-
+        _clb_push_raw.rc is not defined or _clb_push_raw.rc not in [0, 2]
+        or (_clb_push_raw.stdout | default('')) is not search('"summary"')
+      when:
+        - config_log_backfill_action == 'backfill'
+        - config_log_backfill_apply | bool
+        - _clb_plan.totals.to_push | int > 0
+
+    - name: Parse the push
+      ansible.builtin.set_fact:
+        _clb_push: "{{ _clb_push_raw.stdout | from_json }}"
+      when: _clb_push_raw is not skipped
+
+    - name: HARD GATE — every batch must have been accepted
+      # A non-2xx stops the push at that batch; everything before it landed and the next run
+      # resumes from Loki's watermark. Reported as a FAILURE, never as a partial success.
+      ansible.builtin.assert:
+        that:
+          - _clb_push.ok | bool
+          - _clb_push.totals.pushed | int == _clb_plan.totals.to_push | int
+        fail_msg: >-
+          Push incomplete: pushed {{ _clb_push.totals.pushed }} of {{ _clb_plan.totals.to_push }}.
+          {{ _clb_push.errors }}
+        success_msg: "Pushed {{ _clb_push.totals.pushed }} record(s); HTTP {{ _clb_push.streams | map(attribute='http_statuses') | list }}"
+        quiet: true
+      when: _clb_push_raw is not skipped
+
+    # --- verify: after a push, or on its own ----------------------------------------------------
+    - name: Verify — read the window back from Loki and compare with the files
+      ansible.builtin.command:
+        argv:
+          - "{{ config_log_backfill_python }}"
+          - "{{ _clb_tmp.path }}/loki_backfill.py"
+          - "{{ _clb_tmp.path }}/verify.json"
+      register: _clb_verify_raw
+      # The script may poll for up to config_log_backfill_verify_wait while chunks flush. NOT
+      # `async`: a login shell that prints terminal escape queries ahead of the async wrapper's
+      # JSON makes the result undeserialisable. A plain command parses fine;
+      # set ServerAliveInterval in ANSIBLE_SSH_ARGS for a long wait.
+      changed_when: false
+      failed_when: >-
+        _clb_verify_raw.rc is not defined or _clb_verify_raw.rc not in [0, 2]
+        or (_clb_verify_raw.stdout | default('')) is not search('"summary"')
+      when: >-
+        config_log_backfill_action == 'verify'
+        or (config_log_backfill_apply | bool and config_log_backfill_action == 'backfill')
+
+    - name: Parse the verification
+      ansible.builtin.set_fact:
+        _clb_verify: "{{ _clb_verify_raw.stdout | from_json }}"
+      when: _clb_verify_raw is not skipped
+
+    - name: Verification report
+      ansible.builtin.debug:
+        msg: "{{ _clb_verify.summary }}"
+      when: _clb_verify_raw is not skipped
+
+    - name: HARD GATE — Loki must hold exactly the window's lines, at their original times
+      # Compared against what the QUERY API returns, entry by entry (timestamp AND text), not
+      # against the push responses: a 204 says the distributor accepted a batch, not that the
+      # line is retrievable under the selector a reader will use.
+      ansible.builtin.assert:
+        that: [_clb_verify.ok | bool]
+        fail_msg: "Verification failed: {{ _clb_verify.errors }}"
+        success_msg: >-
+          Loki holds every one of {{ _clb_verify.totals.records_in_window }} record(s) in the
+          window, at their original timestamps, and nothing else in the backfill streams.
+        quiet: true
+      when: _clb_verify_raw is not skipped
+
+  always:
+    - name: Remove the work directory
+      ansible.builtin.file:
+        path: "{{ _clb_tmp.path }}"
+        state: absent
+      changed_when: false
+      when: _clb_tmp.path is defined

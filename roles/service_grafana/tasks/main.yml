@@ -1,0 +1,57 @@
+---
+- name: Store vars
+  ansible.builtin.set_fact:
+    grafana_files: "{{ role_path }}/files"
+    grafana_config_dir: "/opt/{{ grafana_container_name }}"
+    grafana_data_volume: "{{ grafana_container_name }}-data"
+
+- name: Assert admin + DB passwords were supplied (never ship the placeholder)
+  ansible.builtin.assert:
+    that:
+      - grafana_admin_password != "CHANGE_ME_VIA_1PASSWORD"
+      - grafana_db_password != "CHANGE_ME_VIA_1PASSWORD"
+      - grafana_admin_password | length > 0
+    fail_msg: "grafana_admin_password + grafana_db_password must be supplied (from a secret store)."
+    quiet: true
+
+- name: Deploy config
+  ansible.builtin.include_role:
+    name: richard_lynch.common.deployment_config
+  vars:
+    deployment_config_source: "{{ grafana_files }}"
+    deployment_config_destination: "{{ grafana_config_dir }}"
+
+- name: Ensure the dashboard provisioning directory exists
+  # The provider in dashboards.yml points here; a missing directory is a provisioner error even
+  # when no dashboards are shipped.
+  ansible.builtin.file:
+    path: "{{ grafana_config_dir }}/provisioning/dashboards/dashboards"
+    state: directory
+    mode: "0755"
+
+- name: Deploy the provisioned dashboards
+  # Additive: a dashboard removed from the source stays in Grafana until its file is deleted here.
+  ansible.builtin.copy:
+    src: "{{ grafana_dashboards_src }}/"
+    dest: "{{ grafana_config_dir }}/provisioning/dashboards/dashboards/"
+    mode: "0644"
+  register: _grafana_dashboards
+  when: grafana_dashboards_src | length > 0
+
+- name: Ensure the shared monitoring network exists
+  community.docker.docker_network:
+    name: "{{ grafana_network }}"
+    attachable: true
+    state: present
+
+- name: Deploy Docker Stack
+  community.docker.docker_compose_v2:
+    project_src: "{{ grafana_config_dir }}"
+    state: present
+    recreate: auto
+
+- name: Restart Docker Stack
+  community.docker.docker_compose_v2:
+    project_src: "{{ grafana_config_dir }}"
+    state: restarted
+  when: deployment_config_changed or (_grafana_dashboards.changed | default(false))

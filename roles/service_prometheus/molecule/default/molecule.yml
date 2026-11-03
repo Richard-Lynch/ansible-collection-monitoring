@@ -1,0 +1,11 @@
+# Offline: render the compose from sample vars and assert the retention caps + remote-write receiver
+# + shared-network wiring are present. No live Prometheus / docker.
+---
+dependency: { name: galaxy }
+driver: { name: default }
+platforms: [{ name: localhost }]
+provisioner:
+  name: ansible
+  inventory: { host_vars: { localhost: { ansible_connection: local } } }
+  playbooks: { converge: converge.yml, verify: verify.yml }
+verifier: { name: ansible }

@@ -1,0 +1,45 @@
+---
+- name: Store vars
+  ansible.builtin.set_fact:
+    apprise_files: "{{ role_path }}/files"
+
+- name: Refuse Traefik exposure without a hostname
+  ansible.builtin.assert:
+    that:
+      - apprise_traefik_host | length > 0
+    fail_msg: apprise_traefik_enabled is true but apprise_traefik_host (the Host() FQDN) is empty.
+    quiet: true
+  when: apprise_traefik_enabled | bool
+
+- name: Deploy config
+  ansible.builtin.include_role:
+    name: richard_lynch.common.deployment_config
+  vars:
+    deployment_config_source: "{{ apprise_files }}"
+    deployment_config_destination: "{{ apprise_config_dir }}"
+
+- name: Ensure the shared monitoring network exists
+  community.docker.docker_network:
+    name: "{{ apprise_network }}"
+    attachable: true
+    state: present
+
+# Only when Traefik exposure is enabled (and Traefik runs on this host) do we ensure its network.
+- name: Ensure the traefik network exists
+  community.docker.docker_network:
+    name: "{{ apprise_traefik_network }}"
+    attachable: true
+    state: present
+  when: apprise_traefik_enabled | bool
+
+- name: Deploy Docker Stack
+  community.docker.docker_compose_v2:
+    project_src: "{{ apprise_config_dir }}"
+    state: present
+    recreate: auto
+
+- name: Restart docker stack
+  community.docker.docker_compose_v2:
+    project_src: "{{ apprise_config_dir }}"
+    state: restarted
+  when: deployment_config_changed

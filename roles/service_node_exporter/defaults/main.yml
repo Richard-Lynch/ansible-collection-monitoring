@@ -1,0 +1,16 @@
+---
+node_exporter_mode: disabled # 'docker' or 'binary' or 'disabled'
+node_exporter_container_name: node_exporter
+node_exporter_image: prom/node-exporter:latest
+node_exporter_host_port: 9100
+
+# binary mode: the node_exporter release to install. Empty or "latest" asks the GitHub API for the
+# newest release at run time; pin a version so every host runs the same collectors.
+node_exporter_pinned_version: ""
+
+# Textfile collector. Off by default because most hosts have nothing to put in it; the
+# textfile_exporters role is what writes .prom files, and this is what makes node_exporter read
+# them. Enabling this WITHOUT that role is harmless (an empty directory yields no series);
+# installing that role without this means metrics are written and never scraped.
+node_exporter_textfile: false
+node_exporter_textfile_dir: /var/lib/node_exporter/textfile_collector

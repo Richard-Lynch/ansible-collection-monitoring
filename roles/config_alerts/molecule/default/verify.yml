@@ -1,0 +1,161 @@
+---
+- name: Verify config_alerts
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    _tmp: /tmp/molecule-config-alerts
+    _rules: /tmp/molecule-config-alerts/rules
+
+  tasks:
+    - name: Read the converge results
+      ansible.builtin.slurp:
+        src: "{{ _tmp }}/results.json"
+      register: _r
+
+    - name: Read owner A's rule file
+      ansible.builtin.slurp:
+        src: "{{ _rules }}/molecule-owner-a.yml"
+      register: _a
+
+    - name: Parse
+      ansible.builtin.set_fact:
+        results: "{{ _r.content | b64decode | from_json }}"
+        a_raw: "{{ _a.content | b64decode }}"
+        a_yaml: "{{ _a.content | b64decode | from_yaml }}"
+
+    # --- the property the role exists for ---------------------------------------------------------
+    - name: Build the expected Go-template strings
+      # These MUST be built with {% raw %} and compared as VARIABLES. Writing the expected text as
+      # a literal inside `assert: that:` does not work: the `{{ ... }}` in the literal is itself
+      # rendered by Jinja before the comparison, and the task then dies with
+      # "'in <string>' requires string as left operand, not CapturedExceptionMarker" — for a
+      # WORKING role as readily as a broken one. Verified directly: that form fails both when the
+      # Go text is present and when it has been stripped, so it can never distinguish the two.
+      ansible.builtin.set_fact:
+        _want_summary: "{% raw %}{{ or $labels.node $labels.instance }}{% endraw %} is down"
+        _want_description: "{% raw %}{{ $value | humanize }}{% endraw %} percent used"
+
+    - name: Go template expressions reached the file verbatim
+      # The single most important assertion here. Prometheus annotations use GO templating, which
+      # shares Jinja's delimiters — if the role ever regresses from copy(content=) to `template:`,
+      # the annotation is either a hard error on the '$' or silently emptied. Asserting on the RAW
+      # bytes rather than the parsed structure, because that is what Prometheus reads.
+      ansible.builtin.assert:
+        that:
+          - _want_summary in a_raw
+          - _want_description in a_raw
+        fail_msg: >-
+          Go template syntax did not survive into the rule file. The role must serialise the rules
+          with to_nice_yaml and write them with copy(content=), never with `template:`.
+        success_msg: "Go template annotations survived verbatim."
+
+    - name: The file is valid YAML with the expected structure
+      ansible.builtin.assert:
+        that:
+          - a_yaml.groups | length == 1
+          - a_yaml.groups[0].name == 'molecule-a'
+          - a_yaml.groups[0].rules | length == 1
+          - a_yaml.groups[0].rules[0].alert == 'GoTemplateSurvives'
+          - a_yaml.groups[0].rules[0].expr == 'up{job="probe"} == 0'
+        fail_msg: "owner A's rule file did not round-trip to the expected structure."
+
+    - name: The file records its owner
+      # Ownership must be discoverable by reading the rules directory — that is what replaces a
+      # central manifest.
+      ansible.builtin.assert:
+        that:
+          - "'ANSIBLE MANAGED — owner: molecule-owner-a' in a_raw"
+        fail_msg: "the rule file does not identify its owner."
+
+    # --- owners are independent -------------------------------------------------------------------
+    - name: Both owners have their own file
+      ansible.builtin.stat:
+        path: "{{ _rules }}/{{ item }}.yml"
+      register: _owners
+      loop: [molecule-owner-a, molecule-owner-b]
+
+    - name: A second owner did not overwrite the first
+      ansible.builtin.assert:
+        that:
+          - _owners.results | map(attribute='stat.exists') | select | list | length == 2
+        fail_msg: >-
+          Expected one file per owner. Owners must not share a file — that is the collision this
+          role exists to remove.
+
+    - name: Owner B's rules are intact despite reusing owner A's group name
+      ansible.builtin.slurp:
+        src: "{{ _rules }}/molecule-owner-b.yml"
+      register: _b
+
+    - name: Owner B kept its own rule
+      ansible.builtin.assert:
+        that:
+          - "'SecondOwnerRule' in (_b.content | b64decode)"
+          - "'GoTemplateSurvives' not in (_b.content | b64decode)"
+        fail_msg: "owner B's file does not contain exactly its own rules."
+
+    # --- removal is real --------------------------------------------------------------------------
+    - name: Owner C's file is gone
+      ansible.builtin.stat:
+        path: "{{ _rules }}/molecule-owner-c.yml"
+      register: _c_after
+
+    - name: state=absent removed the owner's file, and it existed beforehand
+      # Both halves matter: a file that never existed would also be absent now, so the
+      # existed-before flag is what makes this a real test of removal rather than of nothing.
+      ansible.builtin.assert:
+        that:
+          - results.c_existed_before_removal
+          - not _c_after.stat.exists
+        fail_msg: >-
+          state=absent did not remove the owner's file
+          (existed before: {{ results.c_existed_before_removal }}).
+
+    - name: Removing owner C left the other owners alone
+      ansible.builtin.assert:
+        that:
+          - _owners.results | map(attribute='stat.exists') | select | list | length == 2
+        fail_msg: "removing one owner disturbed another's rules."
+
+    # --- the guards actually fire -----------------------------------------------------------------
+    - name: The owner-name guard rejected a path traversal
+      ansible.builtin.assert:
+        that:
+          - results.traversal_failed
+        fail_msg: >-
+          config_alerts_owner='../escaped' was ACCEPTED. The owner name becomes a filename, so this
+          guard must fire.
+
+    - name: No file escaped the rules directory
+      ansible.builtin.stat:
+        path: "{{ _tmp }}/escaped.yml"
+      register: _escaped
+
+    - name: Nothing was written outside the rules dir
+      ansible.builtin.assert:
+        that:
+          - not _escaped.stat.exists
+        fail_msg: "a rule file was written outside {{ _rules }}."
+
+    - name: state=present with no rules was rejected
+      ansible.builtin.assert:
+        that:
+          - results.empty_failed
+        fail_msg: >-
+          An empty rule set was accepted for state=present. That writes an empty file and silently
+          removes the owner's entire alert coverage while reporting success.
+
+    - name: Report
+      ansible.builtin.debug:
+        msg:
+          - "Go templating survived        : yes"
+          - "owners with independent files : 2"
+          - "state=absent removed its file : {{ not _c_after.stat.exists }}"
+          - "traversal guard fired         : {{ results.traversal_failed }}"
+          - "empty-ruleset guard fired     : {{ results.empty_failed }}"
+
+    - name: Clean up
+      ansible.builtin.file:
+        path: "{{ _tmp }}"
+        state: absent

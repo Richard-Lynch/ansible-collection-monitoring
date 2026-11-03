@@ -1,0 +1,105 @@
+---
+# PIN the version (node_exporter_pinned_version) rather than taking "latest" at run time. An
+# unpinned install gives every host whatever release was current the day it was provisioned, so
+# collectors added in a later release (kernel_hung, for one) exist on some hosts and not others,
+# and an alert built on their metrics silently covers only part of the fleet.
+#
+# Set node_exporter_pinned_version to "latest" (or leave it empty) to query the GitHub API for the
+# newest release at run time, deliberately.
+- name: Get latest node_exporter version from GitHub API
+  ansible.builtin.uri:
+    url: https://api.github.com/repos/prometheus/node_exporter/releases/latest
+    return_content: true
+  register: github_node_exporter_release
+  when: (node_exporter_pinned_version | default('')) in ['', 'latest']
+
+- name: Store role path and config vars
+  ansible.builtin.set_fact:
+    node_exporter_version: >-
+      {{ node_exporter_pinned_version
+         if (node_exporter_pinned_version | default('')) not in ['', 'latest']
+         else (github_node_exporter_release.json.tag_name | regex_replace('^v', '')) }}
+    node_exporter_arch: >-
+      {{ 'armv7' if ansible_architecture == 'armv7l' else
+         'arm64' if ansible_architecture == 'aarch64' else
+         'amd64' }}
+    # Built as a single string so the unit file has no trailing space when no flags are set --
+    # a cosmetic diff that would otherwise make the task report changed on every run.
+    _node_exporter_args: >-
+      {{ ' --collector.textfile.directory=' ~ node_exporter_textfile_dir
+         if node_exporter_textfile | bool else '' }}
+- name: Download node_exporter binary
+  ansible.builtin.get_url:
+    url: "https://github.com/prometheus/node_exporter/releases/download/v{{ node_exporter_version }}/node_exporter-{{ node_exporter_version }}.linux-{{ node_exporter_arch
+      }}.tar.gz"
+    dest: /tmp/node_exporter.tar.gz
+
+- name: Extract node_exporter
+  ansible.builtin.unarchive:
+    src: /tmp/node_exporter.tar.gz
+    dest: /usr/local/bin/
+    remote_src: true
+    extra_opts: ["--strip-components=1"]
+
+- name: Create the textfile collector directory
+  # Created even when the collector is disabled, because node_exporter logs an error on every
+  # scrape for a missing directory and the empty case costs nothing.
+  ansible.builtin.file:
+    path: "{{ node_exporter_textfile_dir }}"
+    state: directory
+    mode: "0755"
+  when: node_exporter_textfile | bool
+
+- name: Ensure node_exporter systemd unit
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/node_exporter.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Node Exporter
+      After=network.target
+
+      [Service]
+      ExecStart=/usr/local/bin/node_exporter{{ _node_exporter_args }}
+      Restart=always
+
+      [Install]
+      WantedBy=multi-user.target
+  register: _node_exporter_unit
+
+- name: Reload systemd and start node_exporter
+  ansible.builtin.systemd:
+    name: node_exporter
+    enabled: true
+    state: restarted
+    daemon_reload: true
+
+- name: Confirm node_exporter is serving metrics
+  # The unit restarts fine with a bad flag and then EXITS, so `state: restarted` succeeding proves
+  # nothing. Scraping it is what proves the flag was accepted.
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ node_exporter_host_port }}/metrics"
+    return_content: true
+  register: _node_exporter_scrape
+  retries: 6
+  delay: 5
+  until: _node_exporter_scrape.status | default(0) == 200
+
+- name: HARD GATE — node_exporter must be up, with the textfile collector active when requested
+  # Explicit assert after the retry loop: an `until:` that exhausts its retries CONTINUES, so
+  # without this a dead exporter exits green.
+  # node_textfile_scrape_error is emitted only when the collector is enabled, so its presence is
+  # the read-back that the flag actually took -- not merely that the process is alive.
+  ansible.builtin.assert:
+    that:
+      - _node_exporter_scrape.status | default(0) == 200
+      - not (node_exporter_textfile | bool) or ('node_textfile_scrape_error' in (_node_exporter_scrape.content | default('')))
+    fail_msg: >-
+      node_exporter on {{ inventory_hostname }} is not serving the expected metrics
+      (status {{ _node_exporter_scrape.status | default('none') }}). If the textfile collector was
+      requested, check that --collector.textfile.directory was accepted:
+      journalctl -u node_exporter -n 30
+    success_msg: >-
+      node_exporter is up on :{{ node_exporter_host_port }}
+      {{ '(textfile collector active)' if node_exporter_textfile | bool else '' }}
+    quiet: true

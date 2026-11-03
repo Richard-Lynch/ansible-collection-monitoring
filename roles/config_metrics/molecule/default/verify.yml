@@ -1,0 +1,139 @@
+---
+- name: Verify config_metrics
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    _tmp: /tmp/molecule-config-metrics
+    _sd: /tmp/molecule-config-metrics/file_sd
+
+  tasks:
+    - name: Read the converge results
+      ansible.builtin.slurp:
+        src: "{{ _tmp }}/results.json"
+      register: _r
+
+    - name: Read owner A's file
+      ansible.builtin.slurp:
+        src: "{{ _sd }}/molecule-owner-a.yml"
+      register: _a
+
+    - name: Parse
+      ansible.builtin.set_fact:
+        results: "{{ _r.content | b64decode | from_json }}"
+        a_raw: "{{ _a.content | b64decode }}"
+        a_yaml: "{{ _a.content | b64decode | from_yaml }}"
+
+    # --- the file is what Prometheus expects ------------------------------------------------------
+    - name: Owner A's file is a valid file_sd document
+      # Asserting the STRUCTURE Prometheus consumes — a top-level list of {targets, labels} — not
+      # just that a file exists. file_sd accepts a syntactically valid file that scrapes nothing.
+      ansible.builtin.assert:
+        that:
+          - a_yaml | length == 2
+          - a_yaml[0].targets == ['192.0.2.6:9707']
+          - a_yaml[0].labels.component == 'sonarr'
+          - a_yaml[1].targets == ['192.0.2.6:9708']
+          - a_yaml[1].labels.component == 'radarr'
+          - a_yaml | map(attribute='labels.role') | unique | list == ['service-exporter']
+        fail_msg: "owner A's file_sd did not round-trip to the expected structure."
+
+    - name: The file records its owner
+      # Ownership must be discoverable by reading the directory — that is what replaces a registry.
+      ansible.builtin.assert:
+        that:
+          - "'ANSIBLE MANAGED — owner: molecule-owner-a' in a_raw"
+        fail_msg: "the file_sd file does not identify its owner."
+
+    # --- owners are independent -------------------------------------------------------------------
+    - name: Both owners have their own file
+      ansible.builtin.stat:
+        path: "{{ _sd }}/{{ item }}.yml"
+      register: _owners
+      loop: [molecule-owner-a, molecule-owner-b]
+
+    - name: A second owner did not overwrite the first
+      ansible.builtin.assert:
+        that:
+          - _owners.results | map(attribute='stat.exists') | select | list | length == 2
+        fail_msg: >-
+          Expected one file per owner. Owners sharing one destination is exactly the collision this
+          role exists to remove — a second hand-maintained list silently drops a target.
+
+    - name: Owner B kept its own distinct targets
+      ansible.builtin.slurp:
+        src: "{{ _sd }}/molecule-owner-b.yml"
+      register: _b
+
+    - name: Owner B's file contains only its own targets
+      ansible.builtin.assert:
+        that:
+          - "'192.0.2.7:9100' in (_b.content | b64decode)"
+          - "'192.0.2.6:9707' not in (_b.content | b64decode)"
+        fail_msg: "owner B's file does not contain exactly its own targets."
+
+    - name: The proxmox-node labels survived intact
+      # role=proxmox-node is load-bearing: HostDown fires on up{role="proxmox-node"}, a label that
+      # exists only on this scrape. `node` and `hostname` are both required, deliberately.
+      ansible.builtin.assert:
+        that:
+          - (_b.content | b64decode | from_yaml)[0].labels.role == 'proxmox-node'
+          - (_b.content | b64decode | from_yaml)[0].labels.node == 'pve-node-1'
+          - (_b.content | b64decode | from_yaml)[0].labels.hostname == 'pve-node-1'
+        fail_msg: >-
+          Labels were altered in transit. role=proxmox-node silently disarms HostDown if dropped.
+
+    # --- removal is real --------------------------------------------------------------------------
+    - name: Owner C's file is gone
+      ansible.builtin.stat:
+        path: "{{ _sd }}/molecule-owner-c.yml"
+      register: _c_after
+
+    - name: state=absent removed the owner's file, and it existed beforehand
+      # Both halves matter: a file that never existed would also be absent now.
+      ansible.builtin.assert:
+        that:
+          - results.c_existed_before_removal
+          - not _c_after.stat.exists
+        fail_msg: >-
+          state=absent did not remove the owner's file
+          (existed before: {{ results.c_existed_before_removal }}).
+
+    - name: Removing owner C left the other owners alone
+      ansible.builtin.assert:
+        that:
+          - _owners.results | map(attribute='stat.exists') | select | list | length == 2
+        fail_msg: "removing one owner disturbed another's targets."
+
+    # --- every guard actually fires ---------------------------------------------------------------
+    - name: No file escaped the file_sd directory
+      ansible.builtin.stat:
+        path: "{{ _tmp }}/escaped.yml"
+      register: _escaped
+
+    - name: The guards fired, and nothing was written outside the directory
+      ansible.builtin.assert:
+        that:
+          - results.traversal_failed
+          - results.empty_failed
+          - results.notargets_failed
+          - results.retries_failed
+          - not _escaped.stat.exists
+        fail_msg: >-
+          A guard did not fire: traversal={{ results.traversal_failed }},
+          empty={{ results.empty_failed }}, no-targets={{ results.notargets_failed }},
+          retries-range={{ results.retries_failed }}, escaped-file={{ _escaped.stat.exists }}.
+          A validator that cannot reject is worth nothing.
+
+    - name: Report
+      ansible.builtin.debug:
+        msg:
+          - "owners with independent files : 2"
+          - "labels preserved exactly      : yes"
+          - "state=absent removed its file : {{ not _c_after.stat.exists }}"
+          - "guards fired (4/4)            : traversal, empty, no-targets, retries-range"
+
+    - name: Clean up
+      ansible.builtin.file:
+        path: "{{ _tmp }}"
+        state: absent

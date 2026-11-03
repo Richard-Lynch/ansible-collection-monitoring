@@ -1,0 +1,51 @@
+---
+- name: Ensure docker group exists
+  ansible.builtin.group:
+    name: docker
+    state: present
+
+- name: Ensure alloy user exists and is in docker group
+  ansible.builtin.user:
+    name: alloy
+    system: true
+    create_home: false
+    shell: /usr/sbin/nologin
+    groups: docker
+    append: true
+  notify:
+    - Reload Systemd
+    - Restart Alloy
+
+- name: Create drop-in directory for alloy.service
+  ansible.builtin.file:
+    path: /etc/systemd/system/alloy.service.d
+    state: directory
+    mode: "0755"
+
+- name: Set the service user (root when cadvisor container metrics are collected)
+  # WHY root is the default here. The cadvisor exporter does not only talk to the docker socket —
+  # it reads /var/lib/docker/image/overlay2/layerdb/... to map a cgroup back to a container. That
+  # tree is mode 0700 root:root, so membership of the `docker` group does NOT grant access: alloy
+  # logs "failed to identify the read-write layer ID ... permission denied" for every container,
+  # once a minute, forever. Docker group access covers the socket, not the on-disk layer DB.
+  #
+  # Grafana's own packaging runs Alloy as root for exactly this reason. Set
+  # alloy_run_as_root: false to keep the unprivileged user — container metrics will then be
+  # partial, which is a legitimate trade if a host does not need them.
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/alloy.service.d/override.conf
+    mode: "0644"
+    content: |
+      [Service]
+      User={{ 'root' if (alloy_run_as_root | default(true) | bool) else 'alloy' }}
+      SupplementaryGroups=docker
+  notify:
+    - Reload Systemd
+    - Restart Alloy
+
+# https://grafana.com/docs/alloy/latest/set-up/run/linux/
+- name: Start on boot
+  ansible.builtin.systemd_service:
+    service: alloy.service
+    state: started
+    enabled: true

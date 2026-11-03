@@ -1,0 +1,18 @@
+services:
+  {{ node_exporter_container_name }}:
+    image: {{ node_exporter_image }}
+    container_name: {{ node_exporter_container_name }}
+    restart: unless-stopped
+    network_mode: host
+    pid: host
+    ports:
+      - "{{ node_exporter_host_port }}:9100"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--path.rootfs=/rootfs'
+      - '--web.listen-address=:9100'

@@ -1,0 +1,31 @@
+services:
+  {{ alertmanager_container_name }}:
+    image: {{ alertmanager_image }}
+    container_name: {{ alertmanager_container_name }}
+    restart: unless-stopped
+    volumes:
+      # The config DIRECTORY, not the file. A file-level bind mount pins the inode at container
+      # start, and `template`/`copy` write atomically (a new inode) — so the container would go on
+      # reading the OLD alertmanager.yml forever while `POST /-/reload` returned 200 and changed
+      # nothing. A directory mount sees the rename, so a reload actually reloads.
+      - {{ alertmanager_config_dir }}/config:/etc/alertmanager/config:ro
+      - {{ alertmanager_container_name }}-data:/alertmanager
+{% if alertmanager_heartbeat_mtls_enabled | bool %}
+      # Cloudflare Access mTLS client cert/key for the heartbeat POST — see alertmanager.yml.j2 and
+      # this role's README "Heartbeat transport". Host-side files are 0600, never logged.
+      - {{ alertmanager_config_dir }}/tls:/etc/alertmanager/tls:ro
+{% endif %}
+    command:
+      - "--config.file=/etc/alertmanager/config/alertmanager.yml"
+      - "--storage.path=/alertmanager"
+    ports:
+      - "{{ (alertmanager_bind_address ~ ':') if alertmanager_bind_address | length > 0 else '' }}{{ alertmanager_host_port }}:9093"
+    networks:
+      - {{ alertmanager_network }}
+
+networks:
+  {{ alertmanager_network }}:
+    external: true
+
+volumes:
+  {{ alertmanager_container_name }}-data:

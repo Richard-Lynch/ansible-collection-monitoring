@@ -1,0 +1,24 @@
+---
+# Resolve caller-supplied vars over the generated defaults (roles/service_uptime_kuma/defaults/main.yml
+# is GENERATED from meta/argument_specs.py — see tools/argspec/cli.py — and holds `*__default` vars,
+# not the plain names tasks/templates use).
+- name: Store vars
+  ansible.builtin.set_fact:
+    uptime_kuma_container_name: "{{ uptime_kuma_container_name | default(uptime_kuma_container_name__default) }}"
+    uptime_kuma_image: "{{ uptime_kuma_image | default(uptime_kuma_image__default) }}"
+    uptime_kuma_deploy_dir: "{{ uptime_kuma_deploy_dir | default(uptime_kuma_deploy_dir__default) }}"
+    uptime_kuma_data_dir: "{{ uptime_kuma_data_dir | default(uptime_kuma_data_dir__default) }}"
+    uptime_kuma_host_port: "{{ uptime_kuma_host_port | default(uptime_kuma_host_port__default) }}"
+    uptime_kuma_network_mode: "{{ uptime_kuma_network_mode | default(uptime_kuma_network_mode__default) }}"
+    uptime_kuma_publish_publicly: "{{ uptime_kuma_publish_publicly | default(uptime_kuma_publish_publicly__default) }}"
+
+# uptime_kuma_bind_address resolves separately: it is a SEPARATE gate from uptime_kuma_publish_publicly
+# so a caller can never accidentally publish publicly just by setting a custom bind address — they
+# must also flip uptime_kuma_publish_publicly. If publish_publicly is false, loopback wins regardless
+# of what uptime_kuma_bind_address was set to.
+- name: Resolve the publish gate (loopback wins unless explicitly published)
+  ansible.builtin.set_fact:
+    uptime_kuma_bind_address: >-
+      {{ (uptime_kuma_bind_address | default(uptime_kuma_bind_address__default))
+         if (uptime_kuma_publish_publicly | bool)
+         else uptime_kuma_bind_address__default }}

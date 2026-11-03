@@ -1,0 +1,59 @@
+---
+# AUTO-GENERATED defaults file — DO NOT EDIT.
+#
+# Source of truth: roles/textfile_exporters/meta/argument_specs.py
+# Regenerate:      venv/bin/python tools/argspec/cli.py x generate textfile_exporters
+#
+# Edits here are silently overwritten on the next generation. To change a value or its
+# documentation, change the OptionSpec in the source file above — descriptions there
+# are emitted as the comments in this file.
+# Entrypoint:      main
+
+txe_gpu__default: false
+txe_docker__default: false
+
+# Export WireGuard tunnel state. For the MONITORED end of a site link: when
+# the far end has no other monitoring, 'is the tunnel up' must not itself
+# depend on the tunnel.
+txe_wireguard__default: false
+
+# Which interface to report on.
+txe_wireguard_interface__default: wg0
+
+# Export the site's public egress IP. Intended for ONE host behind the
+# uplink — the address is a property of the uplink, not of the host, so
+# running it everywhere would emit N identical series.
+txe_wan_ip__default: false
+
+# The address something else pins (e.g. a source-IP allow or bypass
+# policy). When set, the exporter also emits whether reality still matches it.
+# Empty means 'export the address but assert nothing about it'.
+txe_wan_ip_expected__default: ''
+
+# Export how stale Home Assistant's recorder is. Intended for ONE host, and
+# deliberately NOT the HAOS box: an exporter must not depend on the thing it
+# watches, or a dead HA produces no metric and absence is indistinguishable
+# from a dead exporter. Run it from a monitoring host.
+# Exists because HA's own prometheus integration exports entity states and
+# NOTHING about whether history is being persisted, so no Prometheus-only
+# rule can see a recorder that has stopped writing.
+txe_ha_recorder__default: false
+
+# Home Assistant's base URL, e.g. http://ha.example.test:8123. Installation
+# config, so it is passed in rather than defaulted to any one address.
+# Required when txe_ha_recorder is true.
+txe_ha_recorder_base_url__default: ''
+
+# Path on the TARGET holding HA's long-lived token, mode 0600. A path, not
+# the token itself: argv is world-readable via /proc, so the value must never
+# reach a command line.
+txe_ha_recorder_token_file__default: /etc/ha-recorder-exporter/token
+
+# How far back to ask the logbook. Deliberately SHORT. /api/logbook/<since>
+# silently caps a response at ~24h from `since`, so the newest row returned
+# tracks the START of the window -- a long value here reports a healthy
+# recorder as days stale.
+txe_ha_recorder_window_seconds__default: 3600
+txe_collector_dir__default: /var/lib/node_exporter/textfile_collector
+txe_interval__default: 30s
+txe_apply__default: false

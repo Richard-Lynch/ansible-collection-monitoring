@@ -1,0 +1,52 @@
+---
+- name: Verify grafana compose + env + datasources
+  hosts: localhost
+  gather_facts: false
+  vars: { render_dir: /tmp/molecule-grafana }
+  tasks:
+    - ansible.builtin.slurp: { src: "{{ item }}" }
+      loop:
+        - "{{ render_dir }}/docker-compose.yml"
+        - "{{ render_dir }}/grafana.env"
+        - "{{ render_dir }}/datasources.yml"
+        - "{{ render_dir }}/dashboards.yml"
+      register: _f
+    - ansible.builtin.set_fact:
+        compose: "{{ _f.results[0].content | b64decode }}"
+        env: "{{ _f.results[1].content | b64decode }}"
+        ds: "{{ _f.results[2].content | b64decode }}"
+        dash: "{{ _f.results[3].content | b64decode | from_yaml }}"
+
+    - name: Compose on shared net, data at /var/lib/grafana (not the postgres path bug)
+      ansible.builtin.assert:
+        that:
+          - "'grafana/grafana-oss:12.1.1' in compose"
+          - "'/var/lib/grafana' in compose"
+          - "'/var/lib/postgresql' not in compose"     # the old copy-paste bug
+          - "'external: true' in compose"
+        fail_msg: "grafana compose wrong (image / data path / network)."
+
+    - name: Env wires the Postgres backend
+      ansible.builtin.assert:
+        that:
+          - "'GF_DATABASE_TYPE=postgres' in env"
+          - "'GF_DATABASE_HOST=postgres:5432' in env"
+          - "'GF_DATABASE_NAME=grafana' in env"
+        fail_msg: "grafana env missing the Postgres backend."
+
+    - name: Datasources point at prometheus + loki by container name
+      ansible.builtin.assert:
+        that:
+          - "'http://prometheus:9090' in ds"
+          - "'http://loki:3100' in ds"
+        fail_msg: "grafana datasources missing prometheus/loki URLs."
+        success_msg: "grafana OK — oss image, /var/lib/grafana, Postgres backend, prom+loki datasources."
+
+    - name: The dashboard provider lands in the caller's folder, never General
+      ansible.builtin.assert:
+        that:
+          - "dash.providers[0].folder == 'Observability'"
+          - "dash.providers[0].options.path == '/etc/grafana/provisioning/dashboards/dashboards'"
+        fail_msg: "grafana dashboard provider folder/path wrong."
+
+    - ansible.builtin.file: { path: "{{ render_dir }}", state: absent }

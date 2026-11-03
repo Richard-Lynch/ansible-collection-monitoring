@@ -1,0 +1,19 @@
+---
+- name: Deploy config
+  ansible.builtin.include_role:
+    name: richard_lynch.common.deployment_config
+  vars:
+    deployment_config_source: "{{ node_exporter_files }}"
+    deployment_config_destination: "{{ node_exporter_config_dir }}"
+
+- name: Deploy Docker Stack
+  community.docker.docker_compose_v2:
+    project_src: "{{ node_exporter_config_dir }}"
+    state: present
+    recreate: auto
+
+- name: Restart Docker Stack
+  community.docker.docker_compose_v2:
+    project_src: "{{ node_exporter_config_dir }}"
+    state: restarted
+  when: deployment_config_changed

@@ -1,0 +1,75 @@
+loki.write "default" {
+	endpoint {
+		url = "{{ config.loki_url }}/loki/api/v1/push"
+	}
+
+  external_labels = {
+      "platform"  = "{{ config.platform }}",
+{% if config.platform == 'vm' and config.parent_hostname is defined %}
+      "parenthostname" = "{{ config.parent_hostname }}",
+{% endif %}
+      "hostname" = {{ ("\"" ~ config.hostname_override ~ "\"") if config.hostname_override is defined and config.hostname_override else "constants.hostname" }},
+      // NO os / arch / version labels. They are content, not identity — and a label whose VALUE
+      // changes forks every series and every log stream that carries it: any query spanning an
+      // Alloy upgrade would silently see two disjoint sets of series/streams rather than one
+      // continuous one, and every upgrade would re-fork everything again.
+      //
+      // Nothing is lost. Alloy's build info is already a metric in its own right
+      // (alloy_build_info, from prometheus.exporter.self) carrying version/os/arch as labels on
+      // ONE series per host, which is exactly where that belongs. Grafana's own label guidance:
+      // labels describe the SOURCE and must be long-lived.
+      // https://grafana.com/docs/loki/latest/get-started/labels/
+    }
+}
+
+prometheus.remote_write "default" {
+  endpoint {
+    url = "{{ config.prometheus_url }}/api/v1/write"
+  }
+
+  external_labels = {
+      "platform"  = "{{ config.platform }}",
+{% if config.platform == 'vm' and config.parent_hostname is defined %}
+      "parenthostname" = "{{ config.parent_hostname }}",
+{% endif %}
+      "hostname" = {{ ("\"" ~ config.hostname_override ~ "\"") if config.hostname_override is defined and config.hostname_override else "constants.hostname" }},
+      // NO os / arch / version labels. They are content, not identity — and a label whose VALUE
+      // changes forks every series and every log stream that carries it: any query spanning an
+      // Alloy upgrade would silently see two disjoint sets of series/streams rather than one
+      // continuous one, and every upgrade would re-fork everything again.
+      //
+      // Nothing is lost. Alloy's build info is already a metric in its own right
+      // (alloy_build_info, from prometheus.exporter.self) carrying version/os/arch as labels on
+      // ONE series per host, which is exactly where that belongs. Grafana's own label guidance:
+      // labels describe the SOURCE and must be long-lived.
+      // https://grafana.com/docs/loki/latest/get-started/labels/
+    }
+}
+
+loki.write "docker" {
+	endpoint {
+		url = "{{ config.loki_url }}/loki/api/v1/push"
+	}
+  external_labels = {
+      "platform"  = "docker",
+      // hostname_override applies here too. On a DOCKER stream `parenthostname` is the guest
+      // running the container, so it must be the SAME identity the host reports everywhere else —
+      // otherwise container logs arrive under the transient FQDN while metrics arrive under the
+      // short name, and nothing correlates them.
+      "parenthostname" = {{ ('"' ~ config.hostname_override ~ '"') if config.hostname_override is defined and config.hostname_override else "constants.hostname" }},
+    }
+}
+
+prometheus.remote_write "docker" {
+  endpoint {
+    url = "{{ config.prometheus_url }}/api/v1/write"
+  }
+  external_labels = {
+      "platform"  = "docker",
+      // hostname_override applies here too. On a DOCKER stream `parenthostname` is the guest
+      // running the container, so it must be the SAME identity the host reports everywhere else —
+      // otherwise container logs arrive under the transient FQDN while metrics arrive under the
+      // short name, and nothing correlates them.
+      "parenthostname" = {{ ('"' ~ config.hostname_override ~ '"') if config.hostname_override is defined and config.hostname_override else "constants.hostname" }},
+    }
+}

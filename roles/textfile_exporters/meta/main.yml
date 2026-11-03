@@ -1,0 +1,16 @@
+---
+galaxy_info:
+  role_name: textfile_exporters
+  namespace: richard_lynch
+  author: Richard Lynch
+  description: >-
+    Prometheus textfile-collector exporters (Intel GPU, Docker health, public egress IP, WireGuard,
+    Home Assistant recorder staleness) on systemd timers.
+  license: GPL-3.0-or-later
+  min_ansible_version: "2.19"
+  platforms:
+    - name: Debian
+      versions: [bookworm]
+    - name: Ubuntu
+      versions: [noble]
+dependencies: []

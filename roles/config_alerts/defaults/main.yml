@@ -1,0 +1,43 @@
+---
+# AUTO-GENERATED defaults file — DO NOT EDIT.
+#
+# Source of truth: roles/config_alerts/meta/argument_specs.py
+# Regenerate:      venv/bin/python tools/argspec/cli.py x generate config_alerts
+#
+# Edits here are silently overwritten on the next generation. To change a value or its
+# documentation, change the OptionSpec in the source file above — descriptions there
+# are emitted as the comments in this file.
+# Entrypoint:      main
+
+# Prometheus rule groups, exactly as Prometheus models them: a list of
+# {name, rules[]} where each rule is {alert, expr, for?, labels?,
+# annotations?}. Passed through structurally rather than reshaped, so the
+# upstream documentation applies unchanged and no translation layer can
+# silently drop a field it does not know about.
+config_alerts_groups__default: []
+
+# 'present' installs this owner's rules; 'absent' removes its file. Cleanup
+# is the OWNER's job: a play that retires the thing it deploys removes its
+# alerts in the same pass. The role
+# never deletes a file it was not asked about, so one owner can never remove
+# another's rules.
+# With 'absent', config_alerts_groups is not required.
+config_alerts_state__default: present
+
+# Host path of the rules directory. This is the bind-mount source; inside
+# the container it appears as /etc/prometheus/rules, which is what the
+# prometheus.yml glob refers to.
+config_alerts_dir__default: /opt/prometheus/config/rules
+
+# Validate with promtool before installing. A rule file with a bad
+# expression makes Prometheus refuse the whole file, so an unvalidated
+# write can silently disable this owner's entire alert coverage.
+config_alerts_validate__default: true
+
+# POST /-/reload after a change. A rules file on disk that Prometheus has
+# not re-read is worth nothing; without this the new rules take effect at
+# the next unrelated restart, whenever that happens to be.
+config_alerts_reload__default: true
+
+# Prometheus container name, for promtool and the reload.
+config_alerts_container__default: prometheus

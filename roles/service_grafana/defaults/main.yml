@@ -1,0 +1,28 @@
+---
+grafana_container_name: grafana
+grafana_image_version: "12.1.1" # pinned; grafana-oss
+
+# Host port for the UI. 0 = no host port (reach via Traefik / the shared network only). Set >0 to expose.
+grafana_host_port: 3000
+
+# Admin — password MUST be supplied (from 1Password); the play passes it. The placeholder is rejected.
+grafana_admin_user: "admin"
+grafana_admin_password: "CHANGE_ME_VIA_1PASSWORD"
+grafana_server_root_url: "%(protocol)s://%(domain)s/"
+
+# Shared external docker network the monitoring stack joins (Grafana → prometheus:9090 / loki:3100).
+grafana_network: monitoring
+
+# Postgres backend (M4) — Grafana state in Postgres, not SQLite (HA-ready). db password from the play.
+grafana_db_host: postgres
+grafana_db_port: 5432
+grafana_db_name: grafana
+grafana_db_user: grafana
+grafana_db_password: "CHANGE_ME_VIA_1PASSWORD"
+
+# Provisioned dashboards. grafana_dashboards_src is a CONTROLLER directory of dashboard JSON files,
+# copied into the provisioner's directory; empty ships none. Which dashboards exist is installation
+# data, so the role carries none of its own.
+grafana_dashboards_src: ""
+# The Grafana folder the provisioned dashboards land in. Never "General" (see dashboards.yml.j2).
+grafana_dashboards_folder: "Dashboards"

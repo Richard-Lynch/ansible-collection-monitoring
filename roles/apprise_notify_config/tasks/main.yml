@@ -1,0 +1,35 @@
+---
+- name: Render the Apprise config (only targets with creds are included)
+  ansible.builtin.set_fact:
+    _apprise_config: "{{ lookup('template', 'apprise-config.yml.j2') }}"
+  no_log: true  # the rendered config carries every target's credential
+
+- name: Assert at least one target is configured
+  ansible.builtin.assert:
+    that:
+      - "'urls:' in _apprise_config"
+      - _apprise_config is search('hassio://|mailto://|slack://')
+    fail_msg: >-
+      No Apprise targets have credentials — nothing to configure. Provide the HA host and token,
+      the email app password, or the Slack URL.
+    quiet: true
+
+- name: Report which targets will be configured (no secrets)
+  ansible.builtin.debug:
+    msg: >-
+      Configuring Apprise config-id '{{ apprise_notify_config_id }}' with:
+      {{ ['home-assistant'] if (apprise_notify_ha_enabled and apprise_notify_ha_token | length > 0 and apprise_notify_ha_host | length > 0) else [] }}
+      {{ ['email'] if (apprise_notify_email_enabled and apprise_notify_email_password | length > 0) else [] }}
+      {{ ['slack'] if (apprise_notify_slack_enabled and apprise_notify_slack_url | length > 0) else [] }}
+
+- name: Push the config into the Apprise stateful config-id
+  ansible.builtin.uri:
+    url: "{{ apprise_notify_base_url }}/add/{{ apprise_notify_config_id }}"
+    method: POST
+    body_format: form-urlencoded
+    body:
+      config: "{{ _apprise_config }}"
+    status_code: [200]
+  register: _apprise_add
+  changed_when: true
+  no_log: true  # the request body is the config, credentials included

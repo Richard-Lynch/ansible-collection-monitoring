@@ -1,0 +1,72 @@
+{{/*
+  Alertmanager notification templates for the Apprise receiver (alertmanager.yml `payload:`).
+  Plain Go template — this file is COPIED, never rendered by Jinja, so no {% raw %} is needed.
+
+  WHY THIS EXISTS. Apprise's payload remapper can only copy ONE field into each of title and
+  body: the subject becomes the bare word "firing" and the body `commonAnnotations.description`.
+  For any rule whose identity lives in labels or in `summary`, such a notification names neither
+  the alert nor the thing alerting. Alertmanager >= 0.32 renders the webhook payload itself, so
+  every notification here carries, per alert: status, severity, alert name, the affected
+  service/host, the summary, when it started, and the full description.
+
+  Label conventions this reads (first match wins):
+    WHAT:  service_name (Loki container streams) > service > job
+    WHERE: hostname > instance
+  A rule that carries none of these still renders — the label list at the bottom of each alert is
+  the fallback, so nothing identifying is ever dropped.
+*/}}
+
+{{- define "apprise.affected" -}}
+{{- if .Labels.service_name }}{{ .Labels.service_name }}{{ else if .Labels.service }}{{ .Labels.service }}{{ else if .Labels.job }}{{ .Labels.job }}{{ end -}}
+{{- if and (or .Labels.service_name .Labels.service .Labels.job) (or .Labels.hostname .Labels.instance) }} on {{ end -}}
+{{- if .Labels.hostname }}{{ .Labels.hostname }}{{ else if .Labels.instance }}{{ .Labels.instance }}{{ end -}}
+{{- end -}}
+
+{{- define "apprise.severity" -}}
+{{- with .Labels.severity }}{{ . | toUpper }}{{ else }}NO SEVERITY{{ end -}}
+{{- end -}}
+
+{{/* Subject: "🔴 FIRING · WARNING · ServiceLogErrorRateHigh — dns on host-a". When a group
+     holds several alerts the first one names the subject and the count says there are more. */}}
+{{- define "apprise.title" -}}
+{{- if eq .Status "firing" }}🔴 FIRING{{ else }}✅ RESOLVED{{ end -}}
+{{- with index .Alerts 0 }} · {{ template "apprise.severity" . }} · {{ .Labels.alertname }}
+{{- if or .Labels.service_name .Labels.service .Labels.job .Labels.hostname .Labels.instance }} — {{ template "apprise.affected" . }}{{ end -}}
+{{- end -}}
+{{- if gt (len .Alerts) 1 }} (+ more: {{ len .Alerts }} alerts){{ end -}}
+{{- end -}}
+
+{{- define "apprise.alert" -}}
+{{ if eq .Status "firing" }}FIRING{{ else }}RESOLVED{{ end }} — {{ .Labels.alertname }}
+Severity: {{ template "apprise.severity" . }}
+Affected: {{ if or .Labels.service_name .Labels.service .Labels.job .Labels.hostname .Labels.instance }}{{ template "apprise.affected" . }}{{ else }}(no service/host label — see labels below){{ end }}
+Summary:  {{ with .Annotations.summary }}{{ . }}{{ else }}(this rule has no summary annotation){{ end }}
+Started:  {{ .StartsAt.UTC.Format "2006-01-02 15:04 UTC" }}
+{{- if eq .Status "resolved" }}
+Resolved: {{ .EndsAt.UTC.Format "2006-01-02 15:04 UTC" }}
+{{- end }}
+Source:   {{ with .Labels.alert_source }}{{ . }} ruler{{ else }}{{ with .Labels.alert_origin }}{{ . }}{{ else }}prometheus (no alert_source label){{ end }}{{ end }}
+Labels:   {{ range .Labels.SortedPairs }}{{ if and (ne .Name "alertname") (ne .Name "severity") }}{{ .Name }}={{ .Value }}  {{ end }}{{ end }}
+{{ with .Annotations.description }}
+What it means:
+{{ . }}
+{{ end }}
+{{- end -}}
+
+{{/* Body: every alert in the group, FIRING ones first, each a self-contained block. */}}
+{{- define "apprise.body" -}}
+{{- range .Alerts.Firing }}{{ template "apprise.alert" . }}
+────────────
+{{ end -}}
+{{- range .Alerts.Resolved }}{{ template "apprise.alert" . }}
+────────────
+{{ end -}}
+{{- /* Not .ExternalURL: with no --web.external-url it renders the container ID as a hostname.
+       The footer (footer.tmpl, from alertmanager_notification_footer) says where to look next. */}}
+{{ template "apprise.footer" . }}
+{{- end -}}
+
+{{/* Apprise notification type — drives the icon/colour on targets that show one. */}}
+{{- define "apprise.type" -}}
+{{- if eq .Status "resolved" }}success{{ else if eq (index .Alerts 0).Labels.severity "critical" }}failure{{ else if eq (index .Alerts 0).Labels.severity "warning" }}warning{{ else }}info{{ end -}}
+{{- end -}}

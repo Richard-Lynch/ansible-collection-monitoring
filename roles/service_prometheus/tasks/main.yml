@@ -1,0 +1,28 @@
+---
+- name: Resolve declared options over their generated defaults
+  # GENERATED from meta/argument_specs.py — binds every declared option to its default, so a
+  # default can never be declared-but-dead (the variable evaluating Undefined at run time).
+  ansible.builtin.include_tasks: _resolve_defaults.yml
+
+- name: Setup vars
+  ansible.builtin.include_tasks: setup_vars.yml
+
+- name: Deploy config
+  ansible.builtin.include_role:
+    name: richard_lynch.common.deployment_config
+  vars:
+    deployment_config_source: "{{ prometheus__files }}"
+    deployment_config_destination: "{{ prometheus__config_dir }}"
+
+- name: Ensure the shared monitoring network exists
+  community.docker.docker_network:
+    name: "{{ prometheus_network }}"
+    attachable: true
+    state: present
+
+- name: Deploy Docker Stack
+  community.docker.docker_compose_v2:
+    project_src: "{{ prometheus__config_dir }}"
+    state: present
+    # `auto`, not `always`: forced recreation trips over the external network.
+    recreate: auto

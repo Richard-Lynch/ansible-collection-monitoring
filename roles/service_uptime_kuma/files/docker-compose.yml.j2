@@ -1,0 +1,13 @@
+services:
+  {{ uptime_kuma_container_name }}:
+    image: {{ uptime_kuma_image }}
+    container_name: {{ uptime_kuma_container_name }}
+    restart: unless-stopped
+    network_mode: {{ uptime_kuma_network_mode }}
+    ports:
+      # Bind address is loopback-only unless uptime_kuma_publish_publicly explicitly flips it — see
+      # role README. The container stays on the docker bridge network and only ever publishes THIS
+      # one port, so it cannot collide with a host-networked service on the same box.
+      - "{{ uptime_kuma_bind_address }}:{{ uptime_kuma_host_port }}:3001"
+    volumes:
+      - {{ uptime_kuma_data_dir }}:/app/data

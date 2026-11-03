@@ -1,0 +1,15 @@
+---
+galaxy_info:
+  role_name: service_apprise
+  namespace: richard_lynch
+  author: Richard Lynch
+  description: >-
+    Deploy the Apprise notification API (caronc/apprise) on the shared monitoring network, optionally
+    behind Traefik. The notification hub Alertmanager (and others) fan out through.
+  license: GPL-3.0-or-later
+  min_ansible_version: "2.19"
+  galaxy_tags:
+    - apprise
+    - notifications
+    - monitoring
+dependencies: []

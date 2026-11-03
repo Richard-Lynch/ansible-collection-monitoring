@@ -1,0 +1,18 @@
+---
+- name: Verify rendered apprise config
+  hosts: localhost
+  gather_facts: false
+  vars: { render_dir: /tmp/molecule-apprise-cfg }
+  tasks:
+    - ansible.builtin.slurp: { src: "{{ render_dir }}/config.yml" }
+      register: _c
+    - ansible.builtin.set_fact: { cfg: "{{ _c.content | b64decode }}" }
+    - name: HA + email present, slack omitted (no cred)
+      ansible.builtin.assert:
+        that:
+          - "'hassio://192.0.2.10:8123/HA_TEST_TOKEN' in cfg"
+          - "'mailto://sender:EMAIL_TEST_PW@gmail.com?to=dest@example.com' in cfg"
+          - "'slack://' not in cfg"
+        fail_msg: "apprise config wrong (HA/email missing or slack leaked without a cred)."
+        success_msg: "apprise config OK — HA + email emitted, slack skipped (no cred)."
+    - ansible.builtin.file: { path: "{{ render_dir }}", state: absent }

@@ -1,0 +1,38 @@
+# Offline scenario — exercises the role's REAL rendering and guard logic with no Prometheus and no
+# docker. Validation and reload are switched off by the scenario (both require the container), and
+# config_alerts_dir points at a temp dir, so nothing outside it is touched.
+---
+dependency:
+  name: galaxy
+driver:
+  name: default
+platforms:
+  - name: localhost
+provisioner:
+  name: ansible
+  # Molecule runs from the scenario directory, so a project ansible.cfg roles_path does not
+  # resolve. Pointed at the roles directory explicitly so converge.yml can include_role the role
+  # under test — which is what makes this a real test of the role's own code rather than a
+  # re-derivation of its logic in the scenario.
+  env:
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/../"
+    # BOTH trees: the installed dependencies (collections.galaxy/) and the tree holding this
+    # role's own collection. Molecule does not inherit ansible.cfg, and a dev venv that bundles
+    # the collections in site-packages would hide the omission.
+    ANSIBLE_COLLECTIONS_PATH: "${MOLECULE_PROJECT_DIRECTORY}/../../collections.galaxy:${MOLECULE_PROJECT_DIRECTORY}/../../../../.."
+  inventory:
+    host_vars:
+      localhost:
+        ansible_connection: local
+  playbooks:
+    converge: converge.yml
+    verify: verify.yml
+verifier:
+  name: ansible
+scenario:
+  # No idempotence step. Converge deliberately provokes the role's guards (a traversing owner name,
+  # an empty rule set) and catches the failures with block/rescue, so a second converge raises those
+  # same errors again — idempotence would read that as a broken ROLE when it is the negative tests
+  # working. Re-installing an unchanged owner is a plain `copy`, idempotent by construction, and
+  # verify asserts the installed files directly.
+  test_sequence: [syntax, converge, verify]

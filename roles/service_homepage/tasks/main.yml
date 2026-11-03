@@ -1,0 +1,94 @@
+---
+- name: Resolve the config source
+  # homepage_config_src (a controller directory of config templates) REPLACES the role's default
+  # set as a whole, so the role never writes a default file that the caller's then overwrites —
+  # that would report a change on every run.
+  ansible.builtin.set_fact:
+    homepage_files: "{{ role_path }}/files"
+    _homepage_config_src: >-
+      {{ homepage_config_src if (homepage_config_src | length > 0) else role_path ~ '/templates/config' }}
+
+- name: Validate the dashboard config before deploying it
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Deploy the compose project
+  ansible.builtin.include_role:
+    name: richard_lynch.common.deployment_config
+  vars:
+    deployment_config_source: "{{ homepage_files }}"
+    deployment_config_destination: "{{ homepage_config_dir }}"
+    # services.yaml carries the widget API keys, so the config must not inherit a source file's
+    # 0644. 0640 root:<PGID>, NOT 0600 root:root: the container runs as PUID/PGID and reads this
+    # config through a bind mount, so a root-only 0600 file is unreadable to the very process it
+    # configures — homepage starts, renders an EMPTY dashboard, and nothing in the deploy fails (the
+    # HTTP gate below still gets its 200). Group-read by the container's own GID is the tightest
+    # mode that actually works. The compose file gets the same mode, for one rule across the tree.
+    deployment_config_file_mode: "0640"
+    deployment_config_file_group: "{{ homepage_pgid }}"
+
+- name: Record whether the compose project changed
+  # deployment_config resets its flag on every include, so it is captured before the second one.
+  ansible.builtin.set_fact:
+    _homepage_compose_changed: "{{ deployment_config_changed | default(false) }}"
+
+- name: Deploy the dashboard config
+  ansible.builtin.include_role:
+    name: richard_lynch.common.deployment_config
+  vars:
+    deployment_config_source: "{{ _homepage_config_src }}"
+    deployment_config_destination: "{{ homepage_config_dir }}/config"
+    deployment_config_file_mode: "0640"
+    deployment_config_file_group: "{{ homepage_pgid }}"
+
+- name: Ensure the shared monitoring network exists
+  community.docker.docker_network:
+    name: "{{ homepage_network }}"
+    attachable: true
+    state: present
+
+- name: Deploy Homepage stack
+  community.docker.docker_compose_v2:
+    project_src: "{{ homepage_config_dir }}"
+    state: present
+    recreate: auto
+
+# A bind-mounted config edit does NOT recreate the container — homepage hot-reloads most config
+# changes on its own, but a restart guarantees a consistent read.
+- name: Restart Homepage when its config changed
+  community.docker.docker_compose_v2:
+    project_src: "{{ homepage_config_dir }}"
+    state: restarted
+  when: (_homepage_compose_changed | bool) or (deployment_config_changed | default(false))
+
+- name: Verify the Homepage container is running
+  no_log: true  # INSPECTENV-01: the result carries every Env VALUE
+  community.docker.docker_container_info:
+    name: "{{ homepage_container_name }}"
+  register: _homepage_container_info
+
+- name: HARD GATE — Homepage container must be running
+  ansible.builtin.assert:
+    that:
+      - _homepage_container_info.exists
+      - _homepage_container_info.container.State.Status == "running"
+    fail_msg: >-
+      Homepage container '{{ homepage_container_name }}' is not running after deploy.
+      State: {{ _homepage_container_info.container.State.Status | default('(container not found)') }}
+    quiet: true
+
+- name: Verify the Homepage HTTP endpoint answers (read-back, no secret in the request)
+  ansible.builtin.uri:
+    url: "http://localhost:{{ homepage_host_port }}/"
+    method: GET
+    status_code: [200]
+  register: _homepage_health
+  changed_when: false
+
+- name: HARD GATE — Homepage endpoint must answer 200
+  ansible.builtin.assert:
+    that:
+      - _homepage_health.status == 200
+    fail_msg: >-
+      Homepage did not answer 200 on http://localhost:{{ homepage_host_port }}/ after deploy —
+      got {{ _homepage_health.status | default('no response') }}.
+    quiet: true

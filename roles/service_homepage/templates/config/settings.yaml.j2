@@ -1,0 +1,16 @@
+---
+# [Settings](https://gethomepage.dev/configs/settings/) — the role's default. A caller's own
+# settings.yaml.j2 (homepage_config_src) usually adds a `layout:` entry per services.yaml section.
+title: "{{ homepage_title }}"
+description: "{{ homepage_description }}"
+instanceName: "{{ homepage_instance_name }}"
+
+headerStyle: clean
+
+quicklaunch:
+  searchDescriptions: true
+  hideInternetSearch: true
+  showSearchSuggestions: false
+  hideVisitURL: false
+
+showStats: false

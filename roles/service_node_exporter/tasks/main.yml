@@ -1,0 +1,22 @@
+---
+- name: Store role path and config vars
+  ansible.builtin.set_fact:
+    node_exporter_config_dir: "/opt/{{ node_exporter_container_name }}"
+    node_exporter_files: "{{ role_path }}/files"
+    node_exporter_arch: >-
+      {{ 'armv7' if ansible_architecture == 'armv7l' else
+         'arm64' if ansible_architecture == 'aarch64' else
+         'amd64' }}
+
+- name: Include docker variant
+  ansible.builtin.include_tasks: docker.yml
+  when: node_exporter_mode == 'docker'
+
+- name: Include binary (systemd) variant
+  ansible.builtin.include_tasks: binary.yml
+  when: node_exporter_mode == 'binary'
+
+- name: Skip node_exporter on this host
+  ansible.builtin.debug:
+    msg: "Skipping node_exporter on {{ inventory_hostname }} (mode: {{ node_exporter_mode }})"
+  when: node_exporter_mode == 'disabled'

@@ -1,0 +1,19 @@
+prometheus.exporter.self "default" {}
+
+// `instance` is pinned rather than left to Alloy's default, which derives it from the scrape
+// target address and therefore follows the machine's TRANSIENT hostname. When DHCP/DNS sets that
+// to an FQDN while /etc/hostname holds the short name, the host reports under TWO identities the
+// moment Alloy restarts, and flips back on reboot. Every exporter here (self, unix, docker) pins
+// instance the same way.
+discovery.relabel "selfmetrics" {
+  targets = prometheus.exporter.self.default.targets
+  rule {
+    target_label = "instance"
+    replacement  = {{ ('"' ~ config.hostname_override ~ '"') if config.hostname_override is defined and config.hostname_override else "constants.hostname" }}
+  }
+}
+
+prometheus.scrape "alloy" {
+  targets    = discovery.relabel.selfmetrics.output
+  forward_to = [prometheus.remote_write.default.receiver]
+}

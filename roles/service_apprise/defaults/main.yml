@@ -1,0 +1,31 @@
+---
+apprise_container_name: apprise-api
+# Pinned to a concrete apprise-api version (NOT `latest`). 1.5.x carries native Alertmanager
+# parsing (apprise library 1.12.x); older tags lack it. Bump deliberately.
+apprise_image: "caronc/apprise:1.5.1"
+
+# Stateful "simple" mode: config lives on disk keyed by a config-id (a URL slug), so Alertmanager /
+# other clients POST to /notify/<config-id>. See the apprise-api docs.
+apprise_stateful_mode: simple
+
+# Networks. Apprise always joins the shared `monitoring` net (so Alertmanager reaches
+# http://apprise-api:8000). Traefik exposure is OPT-IN: only enable it on a host where Traefik runs,
+# otherwise the traefik network won't exist. apprise_traefik_host (the router's Host() FQDN) has no
+# default: it is installation config, and the role refuses Traefik exposure without it.
+apprise_network: monitoring
+apprise_traefik_enabled: false
+apprise_traefik_network: traefik
+apprise_traefik_host: ""
+# Expose a host port for the API when NOT behind Traefik (so it's reachable for testing/other hosts).
+apprise_host_port: 8000
+# Interface the host port is published on. EMPTY = every interface. apprise-api has no authentication
+# and can send mail as the configured account, so on an internet-facing host bind a private address.
+apprise_bind_address: ""
+
+# Config dir (holds config, plugins, attachments).
+apprise_config_dir: "/opt/apprise"
+
+# PUID/PGID for the container.
+apprise_puid: 1000
+apprise_pgid: 1000
+apprise_tz: "Etc/UTC"

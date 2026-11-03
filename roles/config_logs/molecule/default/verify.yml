@@ -1,0 +1,218 @@
+---
+- name: Verify config_logs
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    _tmp: /tmp/molecule-config-logs
+    _d: /tmp/molecule-config-logs/alloy.d
+
+  tasks:
+    - name: Read the converge results
+      ansible.builtin.slurp:
+        src: "{{ _tmp }}/results.json"
+      register: _r
+
+    - name: Read the first owner's drop-in
+      ansible.builtin.slurp:
+        src: "{{ _d }}/logs_app-stack.alloy"
+      register: _a
+
+    - name: Parse
+      ansible.builtin.set_fact:
+        results: "{{ _r.content | b64decode | from_json }}"
+        a: "{{ _a.content | b64decode }}"
+
+    # --- the property that makes drop-ins safe ----------------------------------------------------
+    - name: Every component id carries the owner prefix, with hyphens translated
+      # Alloy shares ONE component namespace across every file in its config directory, and a
+      # duplicate id fails the config load for the WHOLE agent. Ids are identifiers, so the role
+      # must translate 'app-stack' to 'app_stack' rather than reject the hyphen or emit it raw.
+      ansible.builtin.assert:
+        that:
+          - '''local.file_match "app_stack_qbittorrent"'' in a'
+          - '''loki.source.file "app_stack_qbittorrent"'' in a'
+          - '''local.file_match "app_stack_sabnzbd"'' in a'
+          - '''loki.source.file "app_stack_sabnzbd"'' in a'
+          # The raw hyphenated form must NOT appear as a component id — it is not a legal Alloy
+          # identifier, so emitting it would fail the agent's config load.
+          - '''"app-stack_'' not in a'
+        fail_msg: >-
+          Component ids are not owner-prefixed-and-translated. Without the prefix two owners
+          collide; with a raw hyphen the id is not a legal Alloy identifier.
+
+    - name: Each source wires its own file_match into its own loki.source.file
+      ansible.builtin.assert:
+        that:
+          - "'targets    = local.file_match.app_stack_qbittorrent.targets' in a"
+          - "'targets    = local.file_match.app_stack_sabnzbd.targets' in a"
+        fail_msg: "a loki.source.file is not reading the file_match of the same source."
+
+    - name: Every path given was emitted
+      ansible.builtin.assert:
+        that:
+          - "'/var/log/qbittorrent/*.log' in a"
+          - "'/var/log/sabnzbd/*.log' in a"
+          - "'/var/log/sabnzbd/old/*.log' in a"
+        fail_msg: "a declared path is missing from the rendered drop-in."
+
+    - name: Labels and the job label are applied
+      ansible.builtin.assert:
+        that:
+          - "'component = \"qbittorrent\"' in a"
+          - "'job         = \"app-stack\"' in a"
+        fail_msg: "labels were not applied to the path targets."
+
+    - name: An exclude glob reaches every path target of ITS source, and only that source
+      # Alloy applies __path_exclude__ per target, so it must sit beside each __path__ of the
+      # source that declared it (sabnzbd has two) and must not leak onto qbittorrent's.
+      ansible.builtin.assert:
+        that:
+          - "(a | regex_findall('__path_exclude__ = \"/var/log/sabnzbd/\\*\\.previous\\.log\"') | length) == 2"
+          - "(a | regex_findall('__path_exclude__') | length) == 2"
+        fail_msg: "the exclude glob is missing from a sabnzbd target, or leaked onto another source."
+
+    - name: tail_from_end is set on the declaring source's reader only
+      ansible.builtin.assert:
+        that:
+          - "(a | regex_findall('tail_from_end = true') | length) == 1"
+          - "a is search('loki.source.file \"app_stack_sabnzbd\" \\{[^}]*tail_from_end = true')"
+        fail_msg: "tail_from_end missing from sabnzbd's reader, or set on another source."
+
+    - name: It forwards to the shared Loki sink
+      # Reusing loki.write.default rather than declaring a writer per owner, which would duplicate
+      # the connection and the external_labels attached to it.
+      ansible.builtin.assert:
+        that:
+          - "'forward_to = [loki.write.default.receiver]' in a"
+        fail_msg: "the drop-in does not forward to the shared Loki sink."
+
+    - name: The file records its owner
+      ansible.builtin.assert:
+        that:
+          - "'ANSIBLE MANAGED — owner: app-stack' in a"
+        fail_msg: "the drop-in does not identify its owner."
+
+    # --- owners are independent -------------------------------------------------------------------
+    - name: Both owners have their own file
+      ansible.builtin.stat:
+        path: "{{ _d }}/logs_{{ item }}.alloy"
+      register: _owners
+      loop: [app-stack, web-app]
+
+    - name: A second owner did not overwrite the first
+      ansible.builtin.assert:
+        that:
+          - _owners.results | map(attribute='stat.exists') | select | list | length == 2
+        fail_msg: "expected one drop-in per owner."
+
+    - name: The second owner's components carry ITS prefix, not the first's
+      ansible.builtin.slurp:
+        src: "{{ _d }}/logs_web-app.alloy"
+      register: _b
+
+    - name: No cross-owner component collision
+      ansible.builtin.assert:
+        that:
+          - '''local.file_match "web_app_app"'' in (_b.content | b64decode)'
+          - "'app_stack_' not in (_b.content | b64decode)"
+        fail_msg: >-
+          Owners share component ids. Alloy has one namespace across all files, so this fails the
+          whole agent's config load rather than just one file.
+
+    # --- removal is real --------------------------------------------------------------------------
+    - name: The third owner's file is gone
+      ansible.builtin.stat:
+        path: "{{ _d }}/logs_doomed.alloy"
+      register: _c_after
+
+    - name: state=absent removed the drop-in, and it existed beforehand
+      # Both halves matter: a file that never existed would also be absent now.
+      ansible.builtin.assert:
+        that:
+          - results.c_existed_before_removal
+          - not _c_after.stat.exists
+        fail_msg: >-
+          state=absent did not remove the drop-in
+          (existed before: {{ results.c_existed_before_removal }}).
+
+    - name: Removing one owner left the others alone
+      ansible.builtin.assert:
+        that:
+          - _owners.results | map(attribute='stat.exists') | select | list | length == 2
+        fail_msg: "removing one owner disturbed another's log shipping."
+
+    # --- every guard actually fires ---------------------------------------------------------------
+    - name: Nothing escaped the config directory
+      ansible.builtin.stat:
+        path: "{{ _tmp }}/logs_../escaped.alloy"
+      register: _escaped
+
+    - name: The guards fired
+      ansible.builtin.assert:
+        that:
+          - results.traversal_failed
+          - results.empty_failed
+          - results.pathless_failed
+          - results.dupes_failed
+          - not _escaped.stat.exists
+        fail_msg: >-
+          A guard did not fire: traversal={{ results.traversal_failed }},
+          empty={{ results.empty_failed }}, pathless={{ results.pathless_failed }},
+          duplicate-names={{ results.dupes_failed }}. A validator that cannot reject is worth
+          nothing.
+
+    # --- the default entrypoint ---------------------------------------------------------------
+    - name: Read the baseline drop-in
+      ansible.builtin.slurp:
+        src: "{{ _d }}/logs_baseline.alloy"
+      register: _base
+
+    - name: The baseline carries all three source types
+      # Asserting on COMPONENT IDS, which is what Alloy actually keys on, not on comment text.
+      ansible.builtin.assert:
+        that:
+          - '''loki.source.journal "journallogs"'' in (_base.content | b64decode)'
+          - '''local.file_match "systemlogs"'' in (_base.content | b64decode)'
+          - '''loki.source.docker "default"'' in (_base.content | b64decode)'
+        fail_msg: "the baseline drop-in is missing one of journal / system / docker."
+
+    - name: The journal service_name relabel survived the move
+      # LOAD-BEARING. Without it every journal stream inherits the COMPONENT name as service_name,
+      # so Grafana's Logs Drilldown shows the whole journal as a single service.
+      ansible.builtin.assert:
+        that:
+          - "'(.+)\\.service' in (_base.content | b64decode)"
+          - "'target_label  = \"service_name\"' in (_base.content | b64decode)"
+        fail_msg: >-
+          The journal service_name relabel is missing. Every unit on this host will collapse into
+          one Loki stream labelled with the component name.
+
+    - name: boot_id is still NOT a label
+      # It changes on every reboot, so as a stream label it forks a new Loki stream per host per
+      # boot — unbounded stream growth for a value nobody queries by.
+      ansible.builtin.assert:
+        that:
+          - "'boot_id' not in (_base.content | b64decode) | regex_replace('//[^\n]*', '')"
+        fail_msg: "boot_id has been added as a label; it forks a Loki stream on every reboot."
+
+    - name: An empty baseline was rejected
+      ansible.builtin.assert:
+        that:
+          - results.baseline_empty_failed
+        fail_msg: >-
+          A baseline with journal, system and docker all disabled was accepted. That writes a
+          drop-in with no components and silently stops the host shipping logs.
+
+    - name: Report
+      ansible.builtin.debug:
+        msg:
+          - "component ids owner-prefixed  : yes (hyphen translated)"
+          - "owners with independent files : 2, no id collision"
+          - "state=absent removed its file : {{ not _c_after.stat.exists }}"
+          - "guards fired (4/4)            : traversal, empty, pathless, duplicate-names"
+
+    - name: Clean up
+      ansible.builtin.file:
+        path: "{{ _tmp }}"
+        state: absent

@@ -1,0 +1,89 @@
+global:
+  resolve_timeout: {{ alertmanager_resolve_timeout }}
+
+# Go templates that build every Apprise notification (subject, body, type) — see notification.tmpl.
+# The path is inside the DIRECTORY bind mount (docker-compose.yml.j2), so an edit is seen on reload.
+templates:
+  - /etc/alertmanager/config/*.tmpl
+
+route:
+  receiver: apprise
+  # One notification per alert type per affected thing. hostname/service_name are included because
+  # Loki log alerts carry no `instance`, so `[alertname, instance]` alone would put EVERY service's
+  # log-rate alert into one group; a label an alert lacks groups as empty, which is harmless.
+  group_by: ['alertname', 'instance', 'hostname', 'service_name']
+  group_wait: {{ alertmanager_group_wait }}
+  group_interval: {{ alertmanager_group_interval }}
+  repeat_interval: {{ alertmanager_repeat_interval }}
+  routes:
+    # The Watchdog fires CONTINUOUSLY and must never reach a human — its absence is the signal, not
+    # its presence. It gets its own branch so it cannot be grouped with, or throttled behind, real
+    # alerts, and so its repeat_interval can be minutes rather than the 4h used for real alerts.
+    - receiver: {{ 'heartbeat' if (alertmanager_heartbeat_enabled | bool and alertmanager_heartbeat_url | length > 0) else 'blackhole' }}
+      matchers:
+        - alertname = "Watchdog"
+      group_wait: 0s
+      group_interval: {{ alertmanager_heartbeat_interval }}
+      repeat_interval: {{ alertmanager_heartbeat_interval }}
+      continue: false
+{% for _d in alertmanager_discard_routes %}
+    # Arrives, notifies nobody: {{ _d.reason }}
+    - receiver: discard
+      matchers: {{ _d.matchers | to_json }}
+      continue: false
+{% endfor %}
+
+{% if alertmanager_inhibit_rules | length > 0 %}
+# Inhibition: while a SOURCE alert fires, matching TARGET alerts are suppressed (not lost — they
+# notify normally once the source resolves, if they are still firing). `equal` names the labels the
+# two alerts must share, so a rule can be scoped to one site/host rather than everything.
+inhibit_rules:
+{{ alertmanager_inhibit_rules | to_nice_yaml(indent=2) | indent(2, true) }}
+{% endif %}
+
+receivers:
+{% if alertmanager_heartbeat_enabled | bool and alertmanager_heartbeat_url | length > 0 %}
+  # EXTERNAL half of the watchdog. Hosted off-site, so it keeps working when this site does not.
+  # Alertmanager POSTs here every {{ alertmanager_heartbeat_interval }} while the Watchdog fires; if
+  # the pushes stop, the heartbeat service raises the alarm that this stack no longer can.
+  # MUST be https:// — this POST crosses the network boundary.
+  - name: heartbeat
+    webhook_configs:
+      - url: "{{ alertmanager_heartbeat_url }}"
+        send_resolved: false
+{% if alertmanager_heartbeat_mtls_enabled | bool %}
+        # Cloudflare Access mTLS client cert — for a heartbeat URL behind the same Access policy that
+        # protects the Kuma UI. The alternative, a CF-Access-Client-Id / CF-Access-Client-Secret
+        # header pair, needs two custom headers. See this role's README "Heartbeat transport".
+        http_config:
+          tls_config:
+            cert_file: "{{ alertmanager_heartbeat_mtls_cert_file }}"
+            key_file: "{{ alertmanager_heartbeat_mtls_key_file }}"
+{% endif %}
+{% else %}
+  # Heartbeat not configured, so the Watchdog is discarded rather than paging anyone every
+  # {{ alertmanager_heartbeat_interval }} forever. NOTE this means there is currently NO external
+  # dead-man: silence from this stack is still indistinguishable from health. Set
+  # alertmanager_heartbeat_enabled + alertmanager_heartbeat_url to close that gap.
+  - name: blackhole
+{% endif %}
+{% if alertmanager_discard_routes | length > 0 %}
+  # No integrations: an alert routed here is held (visible in /api/v2/alerts with this receiver)
+  # and never sent anywhere. Distinct from `blackhole`, which exists only for the Watchdog.
+  - name: discard
+{% endif %}
+  - name: apprise
+    # Apprise's /notify wants {title, body, type, format}. Alertmanager (>= 0.32) renders exactly that
+    # itself from notification.tmpl, so the notification is built from EVERY alert's labels and
+    # annotations, rather than Apprise's payload remapper, which can copy only one field into each
+    # of title/body (subject "firing", body = commonAnnotations.description) and so names neither
+    # the alert nor the affected service. Apprise then fans out to every URL in the
+    # <config-id> (HA/email/...).
+    webhook_configs:
+      - url: "{{ alertmanager_apprise_url }}/notify/{{ alertmanager_apprise_config_id }}"
+        send_resolved: true
+        payload:
+          title: '{% raw %}{{ template "apprise.title" . }}{% endraw %}'
+          body: '{% raw %}{{ template "apprise.body" . }}{% endraw %}'
+          type: '{% raw %}{{ template "apprise.type" . }}{% endraw %}'
+          format: "{{ alertmanager_apprise_format }}"

@@ -1,0 +1,18 @@
+---
+# https://grafana.com/docs/alloy/latest/set-up/install/linux/
+#
+# INSTALL IS PLATFORM-SPECIFIC; CONFIG AND SYSTEMD ARE NOT. config.yml contains no distro paths
+# at all, and systemd.yml writes to /etc/systemd/system, which is writable even on an image-based
+# OS — so only the first stage varies, and it is selected from facts rather than by a chain of
+# `when:` clauses that would name each platform in this file.
+- name: Detect the platform's install method
+  ansible.builtin.include_tasks: detect_platform.yml
+
+- name: Install Alloy
+  ansible.builtin.include_tasks: "install_{{ alloy_install_method }}.yml"
+
+- name: Configure
+  ansible.builtin.include_tasks: config.yml
+
+- name: Enable in systemd
+  ansible.builtin.include_tasks: systemd.yml

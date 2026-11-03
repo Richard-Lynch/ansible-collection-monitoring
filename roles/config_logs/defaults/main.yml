@@ -1,0 +1,78 @@
+---
+# AUTO-GENERATED defaults file — DO NOT EDIT.
+#
+# Source of truth: roles/config_logs/meta/argument_specs.py
+# Regenerate:      venv/bin/python tools/argspec/cli.py x generate config_logs
+#
+# Edits here are silently overwritten on the next generation. To change a value or its
+# documentation, change the OptionSpec in the source file above — descriptions there
+# are emitted as the comments in this file.
+# Entrypoint:      main
+
+# Log sources to ship. Each entry is:
+#   name:    short id, unique within this owner (becomes part of the
+#            component id, after the owner prefix)
+#   paths:   list of glob paths to tail, e.g. ['/var/log/foo/*.log']
+#   labels:  optional map of Loki labels attached to every line
+#   exclude: optional glob of paths NOT to tail even if `paths` matches
+#            them (Alloy's __path_exclude__), e.g. an app's rotated
+#            '*.previous.txt' copies, which would re-ship old lines
+#   tail_from_end: optional bool — a file with no stored position starts
+#            at its END instead of its beginning. Lines carry ingestion
+#            time, so back-filling an existing file re-dates its whole
+#            history to 'now'; set this when adding sources to a live host.
+# Kept deliberately narrow. Alloy's config language can express far more
+# than this, and a role that accepted arbitrary config would be a templating
+# engine with no way to validate what it emitted. File tailing is the case
+# every application play actually needs; anything more belongs in
+# service_alloy, which owns the agent itself.
+# Required when state=present.
+config_logs_sources__default: []
+
+# 'present' installs this owner's drop-in; 'absent' removes it. Cleanup is
+# the OWNER's job, matching config_alerts and config_metrics. The role never
+# deletes a file it was not asked about, so one owner cannot remove
+# another's log shipping. With 'absent', config_logs_sources is not
+# required.
+config_logs_state__default: present
+
+# The Loki sink to forward to. Defaults to the default writer declared in
+# service_alloy's own drop-in — reusing it rather than
+# declaring a second writer per owner, which would duplicate the connection
+# and the external_labels that go with it.
+config_logs_forward_to__default: loki.write.default.receiver
+
+# Ship the systemd journal. On by default: it is the only log source that exists on
+# every host, and the one that carries unit failures.
+config_logs_journal__default: true
+
+# How far back to read on start, so a restart does not re-ship history.
+config_logs_journal_max_age__default: 12h
+
+# Ship /var/log/{syslog,messages,*.log}.
+config_logs_system__default: true
+
+# Ship container logs via the docker socket. OFF by default — a host without docker
+# has no socket, and the component then fails rather than being skipped.
+config_logs_docker__default: false
+
+# Override the `instance` label on docker logs. Empty means use constants.hostname.
+# Needed where the container's view of its hostname is not the name it is known by.
+config_logs_hostname_override__default: ''
+
+# Alloy's config directory on the shipping host — the value of CONFIG_FILE in
+# /etc/default/alloy. Every *.alloy file here is loaded.
+config_logs_dir__default: /etc/alloy/config.alloy.d
+
+# Restart Alloy when the config changes. Set false to batch several calls on one host
+# into a single restart. Restart, not reload, is deliberate: Alloy's SIGHUP does not
+# re-apply external_labels on loki.write, so a reload reports success while the agent
+# keeps the old config. Disabling this also disables the read-back, because an
+# unrestarted agent has not read the file and the role will not assert what it did not
+# cause.
+config_logs_restart__default: true
+
+# Run `alloy fmt` before installing. A syntax error in ANY file in the directory fails
+# the whole agent's config load, so a bad file takes down this host's metrics and logs
+# together — not just this one concern.
+config_logs_validate__default: true

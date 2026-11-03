@@ -1,0 +1,65 @@
+---
+# AUTO-GENERATED defaults resolver — DO NOT EDIT.
+#
+# Source of truth: roles/config_metrics/meta/argument_specs.py
+# Regenerate:      venv/bin/python tools/argspec/cli.py x generate config_metrics
+#
+# Edits here are silently overwritten on the next generation. To change a value or its
+# documentation, change the OptionSpec in the source file above — descriptions there
+# are emitted as the comments in this file.
+
+# Binds every declared option to its generated default, so a caller-supplied value
+# wins and an unsupplied one falls back rather than evaluating Undefined.
+#
+# Include this FIRST from every entrypoint:
+#   - ansible.builtin.include_tasks: _resolve_defaults.yml
+#
+# Role-specific setup logic belongs in tasks/setup_vars.yml, NOT here — this file is
+# overwritten on every generation.
+#
+# TWO BRANCHES, because `set_fact` persists for the whole play. A role invoked twice in
+# one play would otherwise see its OWN leftover facts on the second call, so a later
+# caller that omitted an option silently inherited the earlier caller's value instead of
+# the declared default. On a repeat call this ignores the role's own facts and rebinds
+# the defaults; an include-level `vars:` shadows the fact, so a value the caller DID
+# supply this time still wins. Roles called once per play only ever run the first branch.
+
+- name: Resolve declared options over their generated defaults
+  ansible.builtin.set_fact:
+    config_metrics_targets: "{{ config_metrics_targets | default(config_metrics_targets__default) if config_metrics_targets__default is defined else config_metrics_targets | default(omit) }}"
+    config_metrics_state: "{{ config_metrics_state | default(config_metrics_state__default) if config_metrics_state__default is defined else config_metrics_state | default(omit) }}"
+    config_metrics_dir: "{{ config_metrics_dir | default(config_metrics_dir__default) if config_metrics_dir__default is defined else config_metrics_dir | default(omit) }}"
+    config_metrics_verify: "{{ config_metrics_verify | default(config_metrics_verify__default) if config_metrics_verify__default is defined else config_metrics_verify | default(omit) }}"
+    config_metrics_job: "{{ config_metrics_job | default(config_metrics_job__default) if config_metrics_job__default is defined else config_metrics_job | default(omit) }}"
+    config_metrics_job_dir: "{{ config_metrics_job_dir | default(config_metrics_job_dir__default) if config_metrics_job_dir__default is defined else config_metrics_job_dir | default(omit) }}"
+    config_metrics_job_group: "{{ config_metrics_job_group | default(config_metrics_job_group__default) if config_metrics_job_group__default is defined else config_metrics_job_group | default(omit) }}"
+    config_metrics_job_secret: "{{ config_metrics_job_secret | default(config_metrics_job_secret__default) if config_metrics_job_secret__default is defined else config_metrics_job_secret | default(omit) }}"
+    config_metrics_job_auth: "{{ config_metrics_job_auth | default(config_metrics_job_auth__default) if config_metrics_job_auth__default is defined else config_metrics_job_auth | default(omit) }}"
+    config_metrics_job_username: "{{ config_metrics_job_username | default(config_metrics_job_username__default) if config_metrics_job_username__default is defined else config_metrics_job_username | default(omit) }}"
+    config_metrics_verify_retries: "{{ config_metrics_verify_retries | default(config_metrics_verify_retries__default) if config_metrics_verify_retries__default is defined else config_metrics_verify_retries | default(omit) }}"
+  when: not (_config_metrics__argspec_resolved | default(false))
+  # At least one option carries no_log, and set_fact would otherwise print every
+  # resolved value — including that one — in the task result.
+  no_log: true
+
+- name: Rebind the defaults on a repeat call, ignoring this role's own leftover facts
+  ansible.builtin.set_fact:
+    config_metrics_targets: "{{ config_metrics_targets__default if config_metrics_targets__default is defined else config_metrics_targets | default(omit) }}"
+    config_metrics_state: "{{ config_metrics_state__default if config_metrics_state__default is defined else config_metrics_state | default(omit) }}"
+    config_metrics_dir: "{{ config_metrics_dir__default if config_metrics_dir__default is defined else config_metrics_dir | default(omit) }}"
+    config_metrics_verify: "{{ config_metrics_verify__default if config_metrics_verify__default is defined else config_metrics_verify | default(omit) }}"
+    config_metrics_job: "{{ config_metrics_job__default if config_metrics_job__default is defined else config_metrics_job | default(omit) }}"
+    config_metrics_job_dir: "{{ config_metrics_job_dir__default if config_metrics_job_dir__default is defined else config_metrics_job_dir | default(omit) }}"
+    config_metrics_job_group: "{{ config_metrics_job_group__default if config_metrics_job_group__default is defined else config_metrics_job_group | default(omit) }}"
+    config_metrics_job_secret: "{{ config_metrics_job_secret__default if config_metrics_job_secret__default is defined else config_metrics_job_secret | default(omit) }}"
+    config_metrics_job_auth: "{{ config_metrics_job_auth__default if config_metrics_job_auth__default is defined else config_metrics_job_auth | default(omit) }}"
+    config_metrics_job_username: "{{ config_metrics_job_username__default if config_metrics_job_username__default is defined else config_metrics_job_username | default(omit) }}"
+    config_metrics_verify_retries: "{{ config_metrics_verify_retries__default if config_metrics_verify_retries__default is defined else config_metrics_verify_retries | default(omit) }}"
+  when: _config_metrics__argspec_resolved | default(false)
+  # At least one option carries no_log, and set_fact would otherwise print every
+  # resolved value — including that one — in the task result.
+  no_log: true
+
+- name: Record that this role has resolved its options in this play
+  ansible.builtin.set_fact:
+    _config_metrics__argspec_resolved: true

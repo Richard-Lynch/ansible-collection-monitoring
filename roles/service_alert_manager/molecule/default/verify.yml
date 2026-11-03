@@ -1,0 +1,139 @@
+---
+- name: Verify alertmanager config
+  hosts: localhost
+  gather_facts: false
+  vars: { render_dir: /tmp/molecule-am }
+  tasks:
+    - ansible.builtin.slurp: { src: "{{ item }}" }
+      loop:
+        - "{{ render_dir }}/alertmanager.yml"
+      register: _f
+    - ansible.builtin.set_fact:
+        amcfg: "{{ _f.results[0].content | b64decode }}"
+    - name: Parse the rendered config as YAML — a substring check passes on broken YAML
+      ansible.builtin.set_fact:
+        _am: "{{ amcfg | from_yaml }}"
+    - name: Route posts to Apprise with an Alertmanager-rendered payload, not a remap
+      vars:
+        _wh: "{{ (_am.receivers | selectattr('name', 'equalto', 'apprise') | first).webhook_configs[0] }}"
+      ansible.builtin.assert:
+        that:
+          - _wh.url == 'http://apprise-api:8000/notify/alerts'
+          - _wh.send_resolved
+          # The Go template calls must reach the file VERBATIM (Jinja {% raw %} in the source); a
+          # Jinja render that ate them would ship an empty title/body.
+          - _wh.payload.title == ('{' * 2) ~ ' template "apprise.title" . ' ~ ('}' * 2)
+          - _wh.payload.body == ('{' * 2) ~ ' template "apprise.body" . ' ~ ('}' * 2)
+          - _wh.payload.type == ('{' * 2) ~ ' template "apprise.type" . ' ~ ('}' * 2)
+          - _wh.payload.format == 'text'
+          - "'/etc/alertmanager/config/*.tmpl' in _am.templates"
+          - "'service_name' in _am.route.group_by and 'hostname' in _am.route.group_by"
+          # The remap is GONE: a leftover `?:` query would make Apprise rewrite the payload again.
+          - "'?' not in _wh.url"
+        fail_msg: "alertmanager is not sending a rendered payload to Apprise: {{ _wh }}"
+    - name: No inhibit_rules key at all when none are configured (an empty list is not valid config)
+      ansible.builtin.assert:
+        that: ["'inhibit_rules' not in _am"]
+        fail_msg: "alertmanager.yml carries inhibit_rules although none were configured."
+    - ansible.builtin.slurp: { src: "{{ render_dir }}/alertmanager.inhibit.yml" }
+      register: _ih
+    - name: Inhibit rules reach the config as parsed YAML, scoped by `equal`
+      vars:
+        _r: "{{ (_ih.content | b64decode | from_yaml).inhibit_rules }}"
+      ansible.builtin.assert:
+        that:
+          - _r | length == 1
+          - _r[0].equal == ['site']
+          - _r[0].source_matchers == ['alertname = "UptimeKumaMonitorDown"', 'service_name =~ "a|b"']
+          - _r[0].target_matchers == ['alertname = "UptimeKumaMonitorDown"', 'service_name !~ "a|b"']
+        fail_msg: "inhibit rules did not render as configured: {{ _r }}"
+    - name: No discard receiver or route when none are configured
+      ansible.builtin.assert:
+        that:
+          - "'discard' not in (_am.receivers | map(attribute='name') | list)"
+          - "'discard' not in (_am.route.routes | map(attribute='receiver') | list)"
+        fail_msg: "a discard receiver/route rendered although alertmanager_discard_routes is empty."
+    - ansible.builtin.slurp: { src: "{{ render_dir }}/alertmanager.discard.yml" }
+      register: _dc
+    - name: A discard route renders as a child route to a receiver with NO integrations
+      vars:
+        _d: "{{ _dc.content | b64decode | from_yaml }}"
+        _route: "{{ _d.route.routes | selectattr('receiver', 'equalto', 'discard') | list }}"
+        _recv: "{{ _d.receivers | selectattr('name', 'equalto', 'discard') | list }}"
+      ansible.builtin.assert:
+        that:
+          - _route | length == 1
+          - _route[0].matchers == ['alertname =~ ".+FiringProof|.+CanFire"']
+          - not (_route[0].continue | default(false))
+          - _recv | length == 1
+          # A receiver with any *_configs key would notify someone.
+          - (_recv[0].keys() | select('search', '_configs$') | list) == []
+          # The catch-all is unchanged: everything else still reaches Apprise.
+          - _d.route.receiver == 'apprise'
+        fail_msg: "discard route did not render as configured: {{ _route }} / {{ _recv }}"
+    - name: The proof regex, anchored the way Alertmanager anchors it, catches proofs and only proofs
+      vars:
+        _re: '^(?:.+FiringProof|.+CanFire)$'
+      ansible.builtin.assert:
+        that:
+          - "'GuestDownFiringProof' is match(_re)"
+          - "'EstateContainerLogsStoppedCanFire' is match(_re)"
+          # Near-misses: the real rules a proof is named after must still notify.
+          - "'GuestDown' is not match(_re)"
+          - "'FiringProofRunner' is not match(_re)"
+        fail_msg: "the firing-proof matcher would discard a real alert or miss a proof."
+    - ansible.builtin.slurp: { src: "{{ render_dir }}/docker-compose.yml" }
+      register: _cd
+    - ansible.builtin.slurp: { src: "{{ render_dir }}/docker-compose.bound.yml" }
+      register: _cb
+    - name: A bind address publishes ONLY on that address; empty publishes on every interface
+      vars:
+        _default: "{{ _cd.content | b64decode }}"
+        _bound: "{{ _cb.content | b64decode }}"
+      ansible.builtin.assert:
+        that:
+          - "'\"9093:9093\"' in _default"
+          - "'192.0.2.10' not in _default"
+          - "'\"192.0.2.10:9093:9093\"' in _bound"
+          # Near-miss: the bare mapping must be GONE when bound, or the port is still world-facing.
+          - "'\"9093:9093\"' not in _bound"
+        fail_msg: "alertmanager_bind_address did not control the published interface."
+    - name: footer.tmpl defines apprise.footer and carries the configured text, Go actions intact
+      vars:
+        _footer: "{{ lookup('ansible.builtin.file', render_dir ~ '/footer.tmpl') }}"
+      ansible.builtin.assert:
+        that:
+          - "('define \"apprise.footer\"') in _footer"
+          - "'To investigate: see the runbook.' in _footer"
+          - "_footer is search('end -' ~ ('}' * 2) ~ '$')"
+        fail_msg: "footer.tmpl did not render as a Go template define: {{ _footer }}"
+    - name: notification.tmpl calls the footer
+      ansible.builtin.assert:
+        that:
+          - "'template \"apprise.footer\"' in lookup('ansible.builtin.file', playbook_dir ~ '/../../files/config/notification.tmpl')"
+        fail_msg: "notification.tmpl no longer calls apprise.footer"
+    - name: notification.tmpl defines every template the payload calls
+      vars:
+        _tmpl: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../files/config/notification.tmpl') }}"
+      ansible.builtin.assert:
+        that:
+          - "'define \"apprise.' ~ item ~ '\"' in _tmpl"
+        fail_msg: "notification.tmpl does not define apprise.{{ item }}"
+      loop: [title, body, type, alert, affected, severity]
+    # This role ships no Prometheus alert rules: a second copy here would silently overwrite the
+    # rule set owned by config_alerts. Rule content is asserted by the role that owns it.
+    - name: This role ships no alert rules
+      ansible.builtin.assert:
+        that:
+          - "not (playbook_dir ~ '/../../files/config/alert-rules.yml') is exists"
+        fail_msg: "service_alert_manager has re-acquired an alert-rules.yml — it must not ship one."
+        success_msg: "service_alert_manager ships no alert rules, as intended."
+    - name: Heartbeat receiver posts to HTTPS with the mTLS client cert/key wired in
+      ansible.builtin.assert:
+        that:
+          - "'https://uptime.example.com/api/push/testtoken' in amcfg"
+          - "'cert_file: \"/etc/alertmanager/tls/heartbeat-client.crt\"' in amcfg"
+          - "'key_file: \"/etc/alertmanager/tls/heartbeat-client.key\"' in amcfg"
+        fail_msg: "heartbeat receiver did not render the expected HTTPS url + mTLS tls_config."
+        success_msg: "Heartbeat mTLS config rendered correctly."
+    - ansible.builtin.file: { path: "{{ render_dir }}", state: absent }

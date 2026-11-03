@@ -1,0 +1,127 @@
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+
+common:
+  path_prefix: /loki
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+
+query_range:
+  results_cache:
+    cache:
+      embedded_cache:
+        enabled: true
+        max_size_mb: 100
+
+schema_config:
+  configs:
+    - from: 2023-01-01
+      store: {{ loki__index_store }}
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+
+limits_config:
+  retention_period: {{ loki__retention_period }}
+  # metric_aggregation_enabled and allow_structured_metadata MUST AGREE.
+  #
+  # pattern_ingester's metric aggregation writes `__aggregated_metric__` streams back into Loki,
+  # and those streams carry structured metadata BY DESIGN. With allow_structured_metadata: false
+  # Loki rejects its own writes with HTTP 400 and retries forever, in a self-inflicted loop over
+  # localhost:3100 that produces log noise and zero data.
+  #
+  # Both OFF rather than both on. The schema is v13/TSDB and WOULD support structured metadata, so
+  # `allow_structured_metadata: true` is the other valid pair — but it ingests a feature nothing
+  # here consumes. Flip both to true deliberately if Explore Logs' pattern view is wanted.
+  metric_aggregation_enabled: false
+  allow_structured_metadata: false
+
+
+table_manager:
+  retention_deletes_enabled: true
+  retention_period: {{ loki__retention_period }}
+
+ingester:
+  wal:
+    enabled: true
+    dir: /loki/wal
+  lifecycler:
+    ring:
+      kvstore:
+        store: inmemory
+      replication_factor: 1
+
+pattern_ingester:
+  # Disabled alongside metric_aggregation_enabled above — leaving this on with aggregation off
+  # keeps the pattern-detection machinery running for a consumer that does not exist.
+  enabled: false
+
+compactor:
+  working_directory: /loki/compactor
+  retention_enabled: true
+  delete_request_store: filesystem
+
+
+{% if loki_ruler_enabled | bool %}
+ruler:
+  # LOG-BASED ALERTING. Without this stanza Loki answers HTTP 400 on /loki/api/v1/rules
+  # ("unable to read rule dir /loki/rules/fake: no such file or directory") and NOTHING can alert
+  # on a log signal — while Grafana still shows every log stream arriving, so the logs look fully
+  # monitored.
+  #
+  # This stanza is the MECHANISM only. It carries no alert rule: rules are owned by the play that
+  # deploys the thing being alerted on and installed per-owner by config_log_alerts, the same split
+  # as Prometheus/config_alerts. See the role README.
+  #
+  # THESE TWO PATHS MUST DIFFER, and conflating them destroys the rules on every restart.
+  #
+  #   storage.local.directory = where rules are READ FROM. The source of truth; this is the
+  #                             directory config_log_alerts writes <owner>.yml into.
+  #   rule_path               = the ruler's SCRATCH working directory, which it CLEANS ON
+  #                             STARTUP before mapping rules into it.
+  #
+  # Set both to one path and everything passes — rules install, load, evaluate, fire and reach
+  # Alertmanager — until the next Loki restart DELETES the rule file, because startup wipes the
+  # directory it reads from. Nothing warns about it: the rules work perfectly right up until the
+  # restart.
+  #
+  # Both live inside the MOUNTED VOLUME (loki_loki -> /loki) so the rule files survive a container
+  # recreate. A path outside the volume would be writable and silently emptied by the next
+  # `docker compose up`, which presents the same way.
+  rule_path: {{ loki__rule_scratch }}
+  storage:
+    type: local
+    local:
+      directory: {{ loki__rule_path }}
+  # The ruler reads rules from {{ loki__rule_path }}/<tenant>/, and `{{ loki_ruler_tenant }}` is the
+  # tenant id Loki hardcodes under `auth_enabled: false` above — single-tenant mode. It is not a
+  # placeholder: renaming it points the ruler at a directory nothing writes to.
+  alertmanager_url: {{ loki_ruler_alertmanager_url }}
+  # Group alerts per rule group before sending, matching Alertmanager's own grouping.
+  evaluation_interval: {{ loki_ruler_evaluation_interval }}
+  # ON deliberately — /loki/api/v1/rules is the only authoritative read-back of what the ruler
+  # actually loaded. A rule file on disk that the ruler never read is worth nothing, and without
+  # this API "the rules are live" could only ever be inferred from the write succeeding.
+  enable_api: {{ loki_ruler_enable_api | bool | lower }}
+  # Alerts are sent with these labels attached so a log alert is distinguishable from a metric
+  # alert at the Alertmanager end — the two arrive on the same route and otherwise look identical.
+  external_labels:
+    alert_source: loki
+{% endif %}
+
+frontend:
+  encoding: protobuf
+
+analytics:
+  reporting_enabled: false

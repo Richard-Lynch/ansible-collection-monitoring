@@ -1,0 +1,17 @@
+---
+# RESTART, NOT RELOAD — see tasks/main.yml. Alloy's SIGHUP re-evaluates the component graph but
+# does NOT re-apply external_labels on loki.write, so a reload reports success while the running
+# agent keeps the old config.
+#
+# Named distinctly from service_alloy's own "Restart Alloy" handler on purpose. A handler name is
+# global to the play, so sharing the name would mean whichever role was included LAST silently
+# defines the handler for both — including its become:/listen semantics.
+# `when:` on a HANDLER is evaluated when the handler flushes, not when it is notified — which is
+# what makes this the right place for the gate. Gating the notifying task instead would need a
+# duplicate no-notify copy of it.
+- name: Restart Alloy for config_logs
+  ansible.builtin.systemd_service:
+    name: alloy
+    state: restarted
+  become: true
+  when: config_logs_restart | bool

@@ -1,0 +1,25 @@
+---
+apiVersion: 1
+prune: true
+# Wired by container name over the shared network.
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    jsonData:
+      httpMethod: POST
+      manageAlerts: true
+      prometheusType: Prometheus
+      timeInterval: 10s
+  - name: Loki
+    uid: loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    jsonData:
+      httpMethod: POST
+      manageAlerts: true
+      timeInterval: 10s

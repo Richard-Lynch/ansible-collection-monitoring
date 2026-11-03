@@ -1,0 +1,168 @@
+---
+- name: Setup vars
+  ansible.builtin.include_tasks: setup_vars.yml
+
+- name: Deploy config
+  ansible.builtin.include_role:
+    name: richard_lynch.common.deployment_config
+  vars:
+    deployment_config_source: "{{ loki__files }}"
+    deployment_config_destination: "{{ loki__config_dir }}"
+
+- name: Ensure the shared monitoring network exists
+  community.docker.docker_network:
+    name: "{{ loki_network }}"
+    attachable: true
+    state: present
+
+- name: Ensure the compose-managed data volume exists
+  # `loki__compose_volume`, NOT `loki__data_volume` — see the long note in setup_vars.yml. The
+  # compose file declares the volume without a `name:`, so compose creates it project-prefixed as
+  # `loki_loki`, and that is the only volume the container ever mounts. Creating the unprefixed
+  # name instead would make an orphan volume that every "ensure the directories exist" run below
+  # writes into, invisibly.
+  community.docker.docker_volume:
+    name: "{{ loki__compose_volume }}"
+    state: present
+
+- name: Ensure Loki volume directories exist (chunks, index, wal, compactor, rules)
+  # The ruler's per-tenant directory is created here too, and CHOWNED to 10001:10001 — the uid the
+  # grafana/loki image runs as (uid=10001(loki) gid=10001(loki)).
+  # A root-owned rule directory is unreadable by the process that needs it, and the ruler reports
+  # that as "no rules loaded" rather than as a permissions error — so getting the ownership wrong
+  # fails in exactly the shape that looks like having no rules at all.
+  #
+  # The tenant directory must EXIST before Loki starts: with the ruler enabled and the directory
+  # absent, /loki/api/v1/rules answers HTTP 400 and the ruler loads nothing. That is why this runs
+  # BEFORE the compose deploy rather than after it.
+  #
+  # The directory LIST is built as data and joined, rather than spliced into the shell string as a
+  # brace expansion: `mkdir -p /loki/{chunks,index,...}` relies on BRACE EXPANSION, which alpine's
+  # `sh` (BusyBox, not bash) does NOT perform — it would create a single directory named literally
+  # `{chunks,index,wal,compactor,rules}` and exit 0. An explicit space-separated list needs no shell
+  # feature at all.
+  vars:
+    _loki_dirs: >-
+      {{ ['/loki/chunks', '/loki/index', '/loki/wal', '/loki/compactor', loki__rule_path]
+         + ([loki__tenant_rule_dir, loki__rule_scratch] if loki_ruler_enabled | bool else []) }}
+    # Both ruler directories need uid 10001: the ruler must read the rules source AND write its
+    # scratch dir. Built as data for the same reason as _loki_dirs — an inline {%- if %} inside the
+    # shell string makes the command's whitespace load-bearing, which ansible-lint flags.
+    _loki_chown_dirs: >-
+      {{ [loki__rule_path] + ([loki__rule_scratch] if loki_ruler_enabled | bool else []) }}
+  ansible.builtin.command: >
+    docker run --rm
+    -v {{ loki__compose_volume }}:/loki
+    alpine
+    sh -c "mkdir -p {{ _loki_dirs | join(' ') }} && chown -R 10001:10001 {{ _loki_chown_dirs | join(' ') }}"
+  changed_when: false # mkdir -p and chown are idempotent; always ensure the dirs exist
+
+- name: Prove the rule directory exists on the volume the container will mount
+  # The mkdir above exits 0 against ANY volume, including one the container never mounts, so its
+  # exit code is not evidence. Read the directory back from the volume by name.
+  # A read, so `docker run` here is an inspection rather than a mutation.
+  ansible.builtin.command: >
+    docker run --rm
+    -v {{ loki__compose_volume }}:/loki
+    alpine
+    stat -c '%n %u:%g' {{ loki__tenant_rule_dir }}
+  register: _loki_ruledir
+  changed_when: false
+  failed_when: false
+  when: loki_ruler_enabled | bool
+
+- name: HARD GATE — the ruler's scratch path must NOT be its rules source
+      # Checked rather than remembered. `rule_path` is the ruler's SCRATCH directory and Loki
+      # CLEANS IT ON STARTUP;
+      # `storage.local.directory` is where rules are read from. Setting both to one path — which
+      # reads as obviously correct, one rules directory — makes Loki delete its own rules at every
+      # restart, after passing every other check.
+      #
+      # Asserted against the role's OWN variables rather than the rendered config, so a future
+      # edit that re-conflates them fails here instead of silently shipping a config that works
+      # until the next restart.
+  ansible.builtin.assert:
+    that:
+      - loki__rule_path != loki__rule_scratch
+      - not loki__tenant_rule_dir.startswith(loki__rule_scratch ~ '/')
+    fail_msg: >-
+      loki__rule_path ({{ loki__rule_path }}) and loki__rule_scratch ({{ loki__rule_scratch }})
+      must be DIFFERENT directories, and the tenant rule dir must not live inside the scratch
+      path. Loki cleans rule_path on startup, so conflating them deletes the installed rules on
+      every restart.
+    success_msg: >-
+      Ruler paths are distinct: rules read from {{ loki__rule_path }}, scratch at
+      {{ loki__rule_scratch }}.
+    quiet: true
+  when: loki_ruler_enabled | bool
+
+- name: HARD GATE — the ruler's tenant directory must exist and belong to uid 10001
+  # Checked here, before the container starts, because this is the one prerequisite Loki cannot
+  # create for itself: with the directory absent the ruler answers HTTP 400 forever.
+  ansible.builtin.assert:
+    that:
+      - _loki_ruledir.rc == 0
+      - "'10001:10001' in (_loki_ruledir.stdout | default(''))"
+    fail_msg: >-
+      {{ loki__tenant_rule_dir }} is missing or wrongly owned on volume
+      '{{ loki__compose_volume }}' (rc={{ _loki_ruledir.rc }},
+      out='{{ _loki_ruledir.stdout | default('') | trim }}').
+      If the volume name is wrong here, the directories are being created on an orphan volume the
+      container never mounts — compose prefixes an unnamed volume with its project name.
+    success_msg: >-
+      Rule directory ready: {{ _loki_ruledir.stdout | default('') | trim }}
+    quiet: true
+  when: loki_ruler_enabled | bool
+
+- name: Deploy Docker Stack
+  community.docker.docker_compose_v2:
+    project_src: "{{ loki__config_dir }}"
+    state: present
+    # `auto`, not `always`: forced recreation trips over the external network.
+    recreate: auto
+
+- name: Restart docker stack
+  community.docker.docker_compose_v2:
+    project_src: "{{ loki__config_dir }}"
+    state: restarted
+  when: deployment_config_changed
+
+# --- prove the ruler came up ---------------------------------------------------------------------
+# Loki reads its configuration AT STARTUP, so the config file being correct is not evidence the
+# RUNNING process carries the ruler. Assert against the live process, not the file that will
+# eventually produce it.
+- name: Confirm the ruler is live
+  when: loki_ruler_enabled | bool
+  block:
+    - name: Ask the ruler for its rule groups
+      # 404 is accepted alongside 200 because it is the ruler's HONEST answer when the API is up
+      # and no rule file has been installed yet — which is the correct state after this role runs
+      # on its own, before any caller registers rules. 400 is the broken-ruler signal (an
+      # unreadable rule dir) and is what this gate exists to catch.
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ loki_host_port }}/loki/api/v1/rules"
+        method: GET
+        return_content: true
+        status_code: [200, 404, 400, 500, 503]
+      register: _loki_ruler
+      until: _loki_ruler.status in [200, 404]
+      retries: 12
+      delay: 5
+      changed_when: false
+      failed_when: false
+
+    - name: HARD GATE — the ruler must be serving
+      # An explicit assert AFTER the until: loop. A retry loop that exhausts its retries reports
+      # green on its own, so `until:` with nothing checking afterwards is a silent guard.
+      ansible.builtin.assert:
+        that:
+          - _loki_ruler.status in [200, 404]
+        fail_msg: >-
+          Loki's ruler is not serving: HTTP {{ _loki_ruler.status }}
+          {{ _loki_ruler.content | default('') | trim }}
+          A 400 naming a missing rule dir means {{ loki__tenant_rule_dir }} does not exist inside
+          the container, or is not owned by uid 10001 — check the volume-directory task above.
+        success_msg: >-
+          Ruler serving (HTTP {{ _loki_ruler.status }}); rules are installed per-owner by
+          config_log_alerts.
+        quiet: true

@@ -1,0 +1,161 @@
+---
+- name: Store vars
+  ansible.builtin.set_fact:
+    alertmanager_files: "{{ role_path }}/files"
+    # Where THIS host reaches the API: the published address, which is not loopback when
+    # alertmanager_bind_address pins it to one interface.
+    alertmanager_api_host: "{{ alertmanager_bind_address if alertmanager_bind_address | length > 0 else 'localhost' }}"
+    # Fixed container-internal paths — the host-side files these bind-mount to are written below.
+    alertmanager_heartbeat_mtls_cert_file: /etc/alertmanager/tls/heartbeat-client.crt
+    alertmanager_heartbeat_mtls_key_file: /etc/alertmanager/tls/heartbeat-client.key
+
+# TLS at the boundary: this POST leaves the site for the public internet, so http:// is never
+# acceptable here — fail loudly rather than silently ship a plaintext heartbeat. Gated on `alertmanager_heartbeat_enabled` so an empty/unset URL when the
+# heartbeat is OFF (the current default) does not block every other run of this role.
+- name: Assert the heartbeat URL is HTTPS when the heartbeat is enabled (boundary-crossing traffic)
+  ansible.builtin.assert:
+    that:
+      - alertmanager_heartbeat_url is match('^https://')
+    fail_msg: >-
+      alertmanager_heartbeat_url must be https:// — it crosses the network boundary to an off-site
+      host. Got:
+      {{ alertmanager_heartbeat_url | default('') }}
+    quiet: true
+  when: alertmanager_heartbeat_enabled | bool
+
+- name: Assert mTLS cert + key were both supplied when mTLS is enabled
+  ansible.builtin.assert:
+    that:
+      - alertmanager_heartbeat_mtls_cert | default('') | length > 0
+      - alertmanager_heartbeat_mtls_key | default('') | length > 0
+    fail_msg: >-
+      alertmanager_heartbeat_mtls_enabled is true but alertmanager_heartbeat_mtls_cert and/or
+      alertmanager_heartbeat_mtls_key is empty. Create the Cloudflare Access mTLS client
+      certificate (see this role's README, "Heartbeat transport") and pass both the cert and key
+      before re-running — this role will not render a broken mTLS config.
+    quiet: true
+  when: alertmanager_heartbeat_mtls_enabled | bool
+
+- name: Ensure the TLS material directory exists (host side of the bind mount)
+  ansible.builtin.file:
+    path: "{{ alertmanager_config_dir }}/tls"
+    state: directory
+    mode: "0700"
+  when: alertmanager_heartbeat_mtls_enabled | bool
+
+- name: Write the Cloudflare Access mTLS client certificate + key (never logged)
+  ansible.builtin.copy:
+    content: "{{ item.content }}"
+    dest: "{{ alertmanager_config_dir }}/tls/{{ item.name }}"
+    mode: "0600"
+  loop:
+    - { name: heartbeat-client.crt, content: "{{ alertmanager_heartbeat_mtls_cert }}" }
+    - { name: heartbeat-client.key, content: "{{ alertmanager_heartbeat_mtls_key }}" }
+  loop_control:
+    label: "{{ item.name }}"
+  when: alertmanager_heartbeat_mtls_enabled | bool
+
+- name: Deploy Alertmanager config
+  ansible.builtin.include_role:
+    name: richard_lynch.common.deployment_config
+  vars:
+    deployment_config_source: "{{ alertmanager_files }}"
+    deployment_config_destination: "{{ alertmanager_config_dir }}"
+
+# PRE-FLIGHT, with the image that will RUN it. Alertmanager is the one path every alert takes to a
+# human, so a config or template it cannot load must fail THIS PLAY, never the container: a
+# container that cannot start alerts nobody, including about itself. `check-config` loads the
+# templates too; the render then exercises them against amtool's built-in sample alerts, which is
+# what catches a template that parses but errors at execution time (a missing field, a bad index).
+- name: PRE-FLIGHT — validate config + templates with the target image
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network=none
+      - "-v={{ alertmanager_config_dir }}/config:/etc/alertmanager/config:ro"
+      - --entrypoint=amtool
+      - "{{ alertmanager_image }}"
+      - check-config
+      - /etc/alertmanager/config/alertmanager.yml
+  register: _am_checkconfig
+  changed_when: false
+  failed_when: _am_checkconfig.rc != 0
+
+- name: PRE-FLIGHT — render each notification template against sample alerts
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network=none
+      - "-v={{ alertmanager_config_dir }}/config:/etc/alertmanager/config:ro"
+      - --entrypoint=amtool
+      - "{{ alertmanager_image }}"
+      - template
+      - render
+      - --template.glob=/etc/alertmanager/config/*.tmpl
+      - '--template.text={% raw %}{{ template {% endraw %}"apprise.{{ item }}"{% raw %} . }}{% endraw %}'
+  loop: [title, body, type]
+  register: _am_render
+  changed_when: false
+  failed_when: _am_render.rc != 0 or (_am_render.stdout | trim | length) == 0
+
+- name: Show the sample notification Alertmanager will send
+  when: not ansible_check_mode
+  ansible.builtin.debug:
+    msg: "{{ dict(_am_render.results | map(attribute='item') | zip(_am_render.results | map(attribute='stdout_lines'))) }}"
+
+- name: Ensure the shared monitoring network exists
+  community.docker.docker_network:
+    name: "{{ alertmanager_network }}"
+    attachable: true
+    state: present
+
+- name: Deploy Alertmanager stack
+  community.docker.docker_compose_v2:
+    project_src: "{{ alertmanager_config_dir }}"
+    state: present
+    recreate: auto
+
+# A bind-mounted config edit does NOT recreate the container, so reload Alertmanager when its config
+# changed (otherwise it keeps running the stale config).
+- name: Reload Alertmanager when its config changed
+  ansible.builtin.uri:
+    url: "http://{{ alertmanager_api_host }}:{{ alertmanager_host_port }}/-/reload"
+    method: POST
+    status_code: [200]
+  when: deployment_config_changed | default(false)
+
+- name: Read Alertmanager's own view of what it is running
+  ansible.builtin.uri:
+    url: "http://{{ alertmanager_api_host }}:{{ alertmanager_host_port }}/api/v2/status"
+    return_content: true
+  register: _am_status
+  until: _am_status.status == 200
+  retries: 15
+  delay: 2
+  changed_when: false
+  # uri does not run under --check, so there is no response to gate on; a dry-run must not fail here.
+  when: not ansible_check_mode
+
+- name: HARD GATE — the RUNNING process is the pinned version with the templated payload loaded
+  # Asserted against the daemon, not the file: the host file and the running config can disagree
+  # while reload says 200. `config.original` REDACTS webhook URLs, so this asserts on fields it
+  # does not redact: the templates glob and the payload's template call.
+  ansible.builtin.assert:
+    that:
+      - _am_status.json.versionInfo.version == (alertmanager_image | regex_replace('^.*:v?', ''))
+      - "'/etc/alertmanager/config/*.tmpl' in _am_status.json.config.original"
+      - "'apprise.title' in _am_status.json.config.original"
+    fail_msg: >-
+      Alertmanager is running {{ _am_status.json.versionInfo.version | default('?') }} and/or has
+      not loaded the templated payload — notifications may be going out in the OLD format, or not
+      at all. Expected {{ alertmanager_image }}.
+    success_msg: "Alertmanager {{ _am_status.json.versionInfo.version }} is running the templated Apprise payload."
+  when: not ansible_check_mode
+# Prometheus alert RULES are deliberately NOT shipped from here. This role deploys and configures
+# Alertmanager (routing, receivers, heartbeat) and nothing else; the rules that feed it are owned by
+# whatever deploys the thing being alerted on (config_alerts), so two roles can never race to
+# define them.

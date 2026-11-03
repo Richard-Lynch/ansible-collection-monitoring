@@ -1,0 +1,28 @@
+---
+# apprise_notify_config — push a notification config into an Apprise stateful config-id (the target
+# Alertmanager POSTs to at /notify/<config-id>). Apprise fans the alert out to every enabled URL.
+#
+# Each target is enabled independently: a target with an empty/placeholder credential is SKIPPED (so
+# you can wire HA + email now and add Slack later without breaking the config).
+
+apprise_notify_base_url: "http://localhost:8000"
+apprise_notify_config_id: "alerts"
+
+# --- Home Assistant (hassio://{host}:{port}/{long-lived-token}) ---
+# Host and token are installation config with no default: the caller sets them (the token resolved
+# from its secret store). Either left empty skips the target.
+apprise_notify_ha_enabled: true
+apprise_notify_ha_host: ""
+apprise_notify_ha_port: 8123
+apprise_notify_ha_token: ""
+
+# --- Email (mailto://{user}:{app-password}@gmail.com?to={dest}) ---
+apprise_notify_email_enabled: true
+apprise_notify_email_user: "" # gmail address (sender), e.g. you@gmail.com
+apprise_notify_email_password: "" # gmail app password, resolved by the caller
+apprise_notify_email_to: "" # destination address
+
+# --- Slack (slack://{webhook path} — from an Incoming Webhook) ---
+# Disabled by default; enable it once the webhook credential is available.
+apprise_notify_slack_enabled: false
+apprise_notify_slack_url: "" # full apprise slack:// URL or the webhook token path

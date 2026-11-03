@@ -1,0 +1,26 @@
+---
+- Monitoring:
+    - Grafana:
+        icon: grafana.png
+        href: https://grafana.example.test
+        siteMonitor: https://grafana.example.test
+        description: Dashboards
+- Media:
+    - Sonarr:
+        icon: sonarr.png
+        href: https://sonarr.example.test
+{% if homepage_sonarr_api_key | length > 0 %}
+        widget:
+          type: sonarr
+          url: http://sonarr:8989
+          key: "{{ homepage_sonarr_api_key }}"
+{% endif %}
+    - Radarr:
+        icon: radarr.png
+        href: https://radarr.example.test
+{% if homepage_radarr_api_key | length > 0 %}
+        widget:
+          type: radarr
+          url: http://radarr:7878
+          key: "{{ homepage_radarr_api_key }}"
+{% endif %}

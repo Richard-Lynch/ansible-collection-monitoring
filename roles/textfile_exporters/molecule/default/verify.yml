@@ -1,0 +1,358 @@
+---
+# Asserts the exporter scripts' OUTPUT CONTRACT, against output the real scripts just produced.
+#
+# Every assertion here corresponds to something that would be silent if it broke. Nothing re-derives the scripts' own logic — the .prom files are read back from disk
+# and checked as text, so a regression in the script fails the scenario.
+- name: Verify the exporter output
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    _tmp: "{{ lookup('env', 'MOLECULE_EPHEMERAL_DIRECTORY') | default('/tmp', true) }}/txe"
+
+  tasks:
+    - name: Read the generated .prom files
+      ansible.builtin.slurp:
+        src: "{{ _tmp }}/out/{{ item }}"
+      register: _prom
+      loop: [intel_gpu.prom, docker_health.prom, docker_broken.prom,
+             wan_match.prom, wan_drift.prom, wan_nopin.prom, wan_down.prom, wan_junk.prom,
+             wan_nocurl.prom, wireguard.prom, wireguard_down.prom]
+
+    - name: Decode them
+      ansible.builtin.set_fact:
+        _gpu: "{{ _prom.results[0].content | b64decode }}"
+        _dock: "{{ _prom.results[1].content | b64decode }}"
+        _broken: "{{ _prom.results[2].content | b64decode }}"
+        _wan_match: "{{ _prom.results[3].content | b64decode }}"
+        _wan_drift: "{{ _prom.results[4].content | b64decode }}"
+        _wan_nopin: "{{ _prom.results[5].content | b64decode }}"
+        _wan_down: "{{ _prom.results[6].content | b64decode }}"
+        _wan_junk: "{{ _prom.results[7].content | b64decode }}"
+        _wan_nocurl: "{{ _prom.results[8].content | b64decode }}"
+        _wg: "{{ _prom.results[9].content | b64decode }}"
+        _wg_down: "{{ _prom.results[10].content | b64decode }}"
+
+    # --- the exposition format itself ----------------------------------------------------------
+    - name: EXACTLY ONE HELP AND ONE TYPE PER METRIC
+      # The bug that cost every GPU series in production: three wrapped HELP lines for one metric
+      # is a hard parse error, and node_exporter rejects the ENTIRE FILE. The file looked healthy
+      # on disk and node_textfile_scrape_error quietly went to 1.
+      vars:
+        _h: >-
+          {{ (_gpu.splitlines() + _dock.splitlines()) | select('match', '^# HELP ')
+             | map('regex_replace', '^# HELP (\S+).*$', '\1') | list }}
+        _t: >-
+          {{ (_gpu.splitlines() + _dock.splitlines()) | select('match', '^# TYPE ')
+             | map('regex_replace', '^# TYPE (\S+).*$', '\1') | list }}
+      ansible.builtin.assert:
+        that:
+          - (_h | length) == (_h | unique | length)
+          - (_t | length) == (_t | unique | length)
+        fail_msg: >-
+          Duplicate HELP {{ _h | difference(_h | unique) | unique }} or
+          TYPE {{ _t | difference(_t | unique) | unique }} — node_exporter would reject the whole
+          file and every series in it would silently disappear.
+        success_msg: "Exposition format valid: one HELP and one TYPE per metric."
+        quiet: true
+
+    - name: Every sample line must be well formed
+      # Catches an unquoted label value or a missing value — both of which make the line unparseable
+      # while the file still looks plausible to a human.
+      vars:
+        _samples: >-
+          {{ (_gpu.splitlines() + _dock.splitlines())
+             | reject('match', '^#') | reject('equalto', '') | list }}
+        _bad: >-
+          {{ _samples | reject('match', '^[a-z_]+(\{[^}]*\})? -?[0-9.]+$') | list }}
+      ansible.builtin.assert:
+        that:
+          - _bad | length == 0
+        fail_msg: "Malformed sample line(s): {{ _bad }}"
+        success_msg: "All {{ _samples | length }} sample lines are well formed."
+        quiet: true
+
+    # --- the GPU exporter ----------------------------------------------------------------------
+    - name: The card is identified, with its driver and device id
+      ansible.builtin.assert:
+        that:
+          - '''intel_gpu_info{pci="0000:03:00.0",driver="xe",device_id="8086:e20c"} 1'' in _gpu'
+        fail_msg: "GPU identity line missing or wrong:\n{{ _gpu }}"
+        success_msg: "GPU identified with correct pci/driver/device_id labels."
+        quiet: true
+
+    - name: act_freq is reported PER GT, and gt1 shows the transcode
+      # The single most important assertion here. The video engines live on gt1, and a report that
+      # only ever looked at gt0 would show an idle card during every transcode — the exact failure
+      # this metric exists to prevent.
+      ansible.builtin.assert:
+        that:
+          - '''intel_gpu_freq_mhz{pci="0000:03:00.0",driver="xe",device_id="8086:e20c",gt="tile0/gt1",kind="act"} 400'' in _gpu'
+          - '''intel_gpu_freq_mhz{pci="0000:03:00.0",driver="xe",device_id="8086:e20c",gt="tile0/gt0",kind="act"} 0'' in _gpu'
+        fail_msg: "Per-GT act_freq wrong — a transcode on gt1 would not be visible:\n{{ _gpu }}"
+        success_msg: "act_freq is per-GT: gt1=400 (busy), gt0=0 (idle)."
+        quiet: true
+
+    - name: cur_freq is exported but is NOT mistaken for the busy signal
+      # cur_freq reads a constant 1200 idle or loaded. It is exported for completeness; this asserts
+      # the fixture's misleading value is faithfully reported rather than silently corrected.
+      ansible.builtin.assert:
+        that:
+          - '''gt="tile0/gt1",kind="cur"} 1200'' in _gpu'
+        fail_msg: "cur_freq not exported as reported by sysfs."
+        success_msg: "cur_freq exported verbatim (1200 whether idle or busy)."
+        quiet: true
+
+    - name: Fans and the power limit are exported, in sane units
+      # microwatts -> watts. Emitting the raw sysfs value would put 320000000 "watts" on a dashboard.
+      ansible.builtin.assert:
+        that:
+          - '''fan="fan1"} 0'' in _gpu'
+          - '''fan="fan2"} 1200'' in _gpu'
+          - '''limit="power1_crit"} 320.00'' in _gpu'
+        fail_msg: "Fan or power reporting wrong (power must be watts, not microwatts):\n{{ _gpu }}"
+        success_msg: "Fans reported; power converted to 320.00 W from microwatts."
+        quiet: true
+
+    - name: A missing sysfs FILE produces no series, not a fabricated zero
+      # gt1/min_freq is deliberately absent from the fixture. If the script defaulted an unreadable
+      # value to 0, a dashboard would show a real-looking 0 MHz floor for a value the driver never
+      # reported -- indistinguishable from a genuine reading. gt0 DOES have min_freq, so this also
+      # proves the script still reports the ones that exist.
+      # The needles carry embedded double quotes, so they live in vars: as single-quoted YAML
+      # scalars. Inlining them into `that:` needs three layers of escaping (YAML, then Jinja, then
+      # the shell that wrote the file) and silently produced a literal \" more than once.
+      vars:
+        _gt1_min: 'gt="tile0/gt1",kind="min"'
+        _gt0_min: 'gt="tile0/gt0",kind="min"} 1200'
+      ansible.builtin.assert:
+        that:
+          - _gt1_min not in _gpu
+          - _gt0_min in _gpu
+        fail_msg: >-
+          An unreadable sysfs attribute was emitted anyway (probably defaulted to 0). Absent must
+          stay absent:
+          {{ _gpu }}
+        success_msg: "Missing sysfs attributes produce no series; present ones still reported."
+        quiet: true
+
+    - name: Metrics the driver does NOT expose are ABSENT, not zero
+      # `xe` exposes no temp*_input and no mem_info_vram_* for this card. Emitting 0 for them would
+      # put a permanently-0C GPU on a dashboard, which reads as a working sensor.
+      ansible.builtin.assert:
+        that:
+          - "'intel_gpu_temp_celsius{' not in _gpu"
+          - "'intel_gpu_vram_bytes{' not in _gpu"
+        fail_msg: >-
+          Absent sysfs attributes were exported anyway — a metric the driver never provides must
+          produce NO series, not a zero.
+        success_msg: "Unavailable sensors correctly produce no series."
+        quiet: true
+
+    # --- the docker health exporter ------------------------------------------------------------
+    - name: Health states map correctly
+      ansible.builtin.assert:
+        that:
+          - '''docker_container_health{name="gluetun"} 0'' in _dock'
+          - '''docker_container_health{name="homepage"} 1'' in _dock'
+          - '''docker_container_health{name="starting-svc"} 2'' in _dock'
+          - '''docker_container_health_failing_streak{name="gluetun"} 42'' in _dock'
+        fail_msg: "Health state mapping wrong:\n{{ _dock }}"
+        success_msg: "unhealthy=0, healthy=1, starting=2, and the failing streak carries through."
+        quiet: true
+
+    - name: A container with NO healthcheck gets NO health series
+      # Most containers define no healthcheck. Exporting those as healthy would make
+      # "not monitored" indistinguishable from "fine" on every dashboard and in every alert.
+      ansible.builtin.assert:
+        that:
+          - '''docker_container_running{name="jellyfin"} 1'' in _dock'
+          - '''docker_container_health{name="jellyfin"}'' not in _dock'
+        fail_msg: >-
+          jellyfin defines no healthcheck but a health series was emitted for it — "not monitored"
+          must not look like "healthy".
+        success_msg: "No-healthcheck containers get _running only, never a health series."
+        quiet: true
+
+    - name: The leading slash is stripped from container names
+      # `docker inspect` returns "/gluetun". An unstripped name would not match an alert rule's
+      # name="gluetun" selector, and the alert would never fire.
+      ansible.builtin.assert:
+        that:
+          - '''name="/'' not in _dock'
+        fail_msg: "Container names still carry docker's leading slash — alert selectors would miss."
+        success_msg: "Container names normalised (no leading slash)."
+        quiet: true
+
+    - name: A broken docker reports an explicit zero, not an empty file
+      ansible.builtin.assert:
+        that:
+          - "'docker_health_exporter_up 0' in _broken"
+          - "'docker_container_health{' not in _broken"
+        fail_msg: >-
+          With docker unreachable the exporter must emit docker_health_exporter_up 0 so the failure
+          is visible as a value, not as an absent file indistinguishable from "never ran":
+          {{ _broken }}
+        success_msg: "Docker-unreachable path emits an explicit 0."
+        quiet: true
+
+    - name: The healthy path reports up=1
+      ansible.builtin.assert:
+        that:
+          - "'docker_health_exporter_up 1' in _dock"
+        fail_msg: "Exporter did not report itself up on the success path."
+        success_msg: "Healthy path reports docker_health_exporter_up 1."
+        quiet: true
+
+    # --- WAN egress IP exporter ------------------------------------------------------------------
+    # This exporter guards a Cloudflare Access source-IP bypass. Every assertion below is about a
+    # way it could report something FALSE rather than merely fail to report.
+    - name: A matching address reports success, the address, and a match
+      ansible.builtin.assert:
+        that:
+          - "'estate_wan_egress_ip_lookup_success 1' in _wan_match"
+          - "'estate_wan_egress_ip_info{ip=\"203.0.113.7\"} 1' in _wan_match"
+          - "'estate_wan_egress_ip_matches_expected 1' in _wan_match"
+        fail_msg: "matching case did not produce the expected three series: {{ _wan_match }}"
+        success_msg: "match case OK."
+
+    - name: A CHANGED address still reports success but flags the mismatch
+      # The reason this exporter exists. If this regresses to 1, the alert never fires and the
+      # symptom is an unexplained SSO prompt weeks later.
+      ansible.builtin.assert:
+        that:
+          - "'estate_wan_egress_ip_lookup_success 1' in _wan_drift"
+          - "'estate_wan_egress_ip_matches_expected 0' in _wan_drift"
+          - "'estate_wan_egress_ip_info{ip=\"203.0.113.7\"} 1' in _wan_drift"
+        fail_msg: "drift case did not flag a mismatch: {{ _wan_drift }}"
+        success_msg: "drift case correctly reports matches_expected 0."
+
+    - name: With no pinned address, the match series is OMITTED entirely
+      # Not emitted as 1. A default-true would silently assert a match against nothing.
+      ansible.builtin.assert:
+        that:
+          - "'estate_wan_egress_ip_matches_expected' not in _wan_nopin"
+          - "'estate_wan_egress_ip_info{ip=\"203.0.113.7\"} 1' in _wan_nopin"
+        fail_msg: "no-pin case emitted a match series it cannot justify: {{ _wan_nopin }}"
+        success_msg: "no-pin case correctly omits the match series."
+
+    - name: A FAILED lookup reports failure and asserts NOTHING about the address
+      # Critical: it must not emit matches_expected at all. Emitting 0 would make an uplink outage
+      # indistinguishable from an ISP address change; emitting 1 would be a lie. Absence is the
+      # only honest answer, and it also lets the series go stale rather than sit at a false 1.
+      ansible.builtin.assert:
+        that:
+          - "'estate_wan_egress_ip_lookup_success 0' in _wan_down"
+          - "'estate_wan_egress_ip_matches_expected' not in _wan_down"
+          - "'estate_wan_egress_ip_info' not in _wan_down"
+        fail_msg: "broken-lookup case made a claim it could not support: {{ _wan_down }}"
+        success_msg: "broken-lookup case correctly asserts nothing."
+
+    - name: A GARBAGE response is rejected, not exported as an address
+      # A captive portal returns HTML with HTTP 200. Without validation that markup becomes a
+      # Prometheus label value.
+      ansible.builtin.assert:
+        that:
+          - "'estate_wan_egress_ip_lookup_success 0' in _wan_junk"
+          - "'estate_wan_egress_ip_info' not in _wan_junk"
+          - "'html' not in _wan_junk"
+        fail_msg: "garbage response was not rejected: {{ _wan_junk }}"
+        success_msg: "garbage response correctly rejected."
+
+    - name: WAN exporter output is valid exposition format (one HELP/TYPE per metric)
+      # Each condition is ONE line: a condition split across lines inside a block scalar gets
+      # folded, and the halves stop meaning what they look like they mean.
+      #
+      # A HELP name may legitimately repeat ACROSS these files (they are separate runs of the same
+      # exporter), so each file is checked on its own rather than the concatenation.
+      vars:
+        _names_match: "{{ _wan_match.splitlines() | select('match', '^# HELP ') | map('regex_replace', '^# HELP (\\S+).*$', '\\1') | list }}"
+        _names_drift: "{{ _wan_drift.splitlines() | select('match', '^# HELP ') | map('regex_replace', '^# HELP (\\S+).*$', '\\1') | list }}"
+        _names_nopin: "{{ _wan_nopin.splitlines() | select('match', '^# HELP ') | map('regex_replace', '^# HELP (\\S+).*$', '\\1') | list }}"
+        _names_down: "{{ _wan_down.splitlines() | select('match', '^# HELP ') | map('regex_replace', '^# HELP (\\S+).*$', '\\1') | list }}"
+        _names_junk: "{{ _wan_junk.splitlines() | select('match', '^# HELP ') | map('regex_replace', '^# HELP (\\S+).*$', '\\1') | list }}"
+      ansible.builtin.assert:
+        that:
+          - "_names_match | length == _names_match | unique | length"
+          - "_names_drift | length == _names_drift | unique | length"
+          - "_names_nopin | length == _names_nopin | unique | length"
+          - "_names_down | length == _names_down | unique | length"
+          - "_names_junk | length == _names_junk | unique | length"
+        fail_msg: >-
+          WAN exporter emitted duplicate HELP lines — node_exporter would drop the WHOLE file.
+          match={{ _names_match }} drift={{ _names_drift }} nopin={{ _names_nopin }}
+          down={{ _names_down }} junk={{ _names_junk }}
+        success_msg: "WAN exporter exposition format valid in all five cases."
+
+    - name: The exporter works with NO curl available (wget/python3 fallback)
+      # Without this the exporter is silently blind on every host that lacks curl — and it reports
+      # that blindness as lookup_success 0, which reads as "the uplink is down".
+      ansible.builtin.assert:
+        that:
+          - "'estate_wan_egress_ip_lookup_success 1' in _wan_nocurl"
+          - "'estate_wan_egress_ip_info{ip=\"203.0.113.7\"} 1' in _wan_nocurl"
+        fail_msg: >-
+          The exporter could not determine the IP without curl: {{ _wan_nocurl }}
+          It would install cleanly and report a permanent false uplink failure.
+        success_msg: "no-curl fallback works (wget path)."
+
+    # --- WireGuard exporter --------------------------------------------------------------------
+    - name: A healthy tunnel reports up, its peers, and traffic BOTH ways
+      ansible.builtin.assert:
+        that:
+          - "'wireguard_up{interface=\"wg0\"} 1' in _wg"
+          - "'wireguard_peers{interface=\"wg0\"} 2' in _wg"
+          - "'wireguard_transfer_rx_bytes_total{interface=\"wg0\",peer=\"PEER_OK\"} 4680' in _wg"
+          - "'wireguard_transfer_tx_bytes_total{interface=\"wg0\",peer=\"PEER_OK\"} 6012' in _wg"
+        fail_msg: "healthy-tunnel metrics wrong: {{ _wg }}"
+        success_msg: "healthy tunnel exports up, peer count, and rx/tx per peer."
+
+    - name: RX and TX are exported SEPARATELY
+      # Not cosmetic. WireGuard silently DROPS a decrypted packet whose source is outside the
+      # peer's AllowedIPs, so a misconfiguration gives a healthy handshake, rising TX, and RX
+      # pinned at zero. Collapsing them into one "traffic" metric would hide exactly that.
+      ansible.builtin.assert:
+        that:
+          - "'wireguard_transfer_rx_bytes_total' in _wg"
+          - "'wireguard_transfer_tx_bytes_total' in _wg"
+        fail_msg: "rx and tx must be separate metrics — a merged one cannot reveal an AllowedIPs mismatch."
+        success_msg: "rx and tx exported separately."
+
+    - name: A peer that has NEVER handshaked reports -1, not a huge age
+      # epoch 0 means "never", not "in 1970". Exporting the arithmetic difference would emit ~1.8
+      # billion seconds and read as an extremely stale peer rather than one that never connected.
+      ansible.builtin.assert:
+        that:
+          - "'wireguard_latest_handshake_seconds{interface=\"wg0\",peer=\"PEER_NEVER\"} -1' in _wg"
+        fail_msg: "a never-handshaked peer must report -1: {{ _wg }}"
+        success_msg: "never-handshaked peer correctly reports -1."
+
+    - name: A fresh handshake reports a small POSITIVE age
+      # Extracted by SPLITTING the matching line rather than with a regex containing quotes — a
+      # pattern with embedded double quotes inside a double-quoted YAML scalar does not parse, and
+      # escaping it into legibility is worse than not needing to.
+      vars:
+        _age: "{{ (_wg.splitlines() | select('search', 'PEER_OK') | select('search', 'handshake') | first).split(' ') | last | int }}"
+      ansible.builtin.assert:
+        that:
+          - "_age | int >= 25"
+          - "_age | int <= 120"
+        fail_msg: "expected an age near 30s for the fresh peer, got {{ _age }}"
+        success_msg: "fresh handshake reports a plausible age ({{ _age }}s)."
+
+    - name: An absent interface reports up 0, NOT an empty file
+      ansible.builtin.assert:
+        that:
+          - "'wireguard_up{interface=\"wg0\"} 0' in _wg_down"
+          - "'wireguard_peers' not in _wg_down"
+        fail_msg: "an absent interface must still emit up 0: {{ _wg_down }}"
+        success_msg: "absent interface reports up 0 and no fabricated peer data."
+
+    - name: WireGuard exporter output is valid exposition format
+      vars:
+        _h: "{{ _wg.splitlines() | select('match', '^# HELP ') | map('regex_replace', '^# HELP (\\S+).*$', '\\1') | list }}"
+      ansible.builtin.assert:
+        that:
+          - "_h | length == _h | unique | length"
+        fail_msg: "duplicate HELP lines — node_exporter would reject the whole file. {{ _h }}"
+        success_msg: "WireGuard exposition format valid ({{ _h | length }} metrics)."

@@ -1,0 +1,23 @@
+---
+- name: Converge — render apprise config (HA + email enabled, slack empty)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    apprise_notify_config_id: alerts
+    apprise_notify_ha_enabled: true
+    apprise_notify_ha_host: "192.0.2.10"
+    apprise_notify_ha_port: 8123
+    apprise_notify_ha_token: "HA_TEST_TOKEN"
+    apprise_notify_email_enabled: true
+    apprise_notify_email_user: "sender@example.com"
+    apprise_notify_email_password: "EMAIL_TEST_PW"
+    apprise_notify_email_to: "dest@example.com"
+    apprise_notify_slack_enabled: false
+    apprise_notify_slack_url: ""
+    render_dir: /tmp/molecule-apprise-cfg
+  tasks:
+    - ansible.builtin.file: { path: "{{ render_dir }}", state: directory, mode: "0755" }
+    - ansible.builtin.template:
+        src: "{{ playbook_dir }}/../../templates/apprise-config.yml.j2"
+        dest: "{{ render_dir }}/config.yml"
+        mode: "0644"

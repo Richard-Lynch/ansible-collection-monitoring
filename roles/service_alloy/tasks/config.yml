@@ -1,0 +1,69 @@
+---
+- name: Ensure config directory exists
+  ansible.builtin.file:
+    path: "{{ alloy_config_dir }}"
+    state: directory
+
+- name: Ensure the textfile collector directory exists
+  # The unix exporter's textfile collector is enabled unconditionally in metrics_system.alloy.j2,
+  # and it logs an error on EVERY scrape when its directory is missing, on every host that runs no
+  # textfile exporter. Harmless to the metrics, but it buries real errors in the Alloy journal,
+  # which is precisely where you look when something is wrong.
+  #
+  # Created empty rather than making the collector conditional: an empty directory yields no
+  # series and costs nothing, while a host that LATER gains an exporter then needs no config
+  # change. The textfile_exporters role creates the same path with the same mode.
+  ansible.builtin.file:
+    path: "{{ alloy_config.metrics_system.textfile_directory | default(alloy_config__default.metrics_system.textfile_directory) }}"
+    state: directory
+    mode: "0755"
+
+- name: Deploy config files
+  ansible.builtin.template:
+    src: "{{ config_file }}"
+    dest: "{{ alloy_config_dir }}/{{ config_file | regex_replace('.j2$', '') }}"
+  vars:
+    config: "{{ alloy_config }}"
+  # LOG SOURCES ARE NOT HERE. logs_journal / logs_system / logs_docker belong to config_logs
+  # (entrypoint: default), which owns what is fed INTO the sinks. This role owns
+  # the agent and the sinks themselves — targets.alloy.j2's loki.write / prometheus.remote_write
+  # carry the external_labels that identify the host, and every component in every file forwards to
+  # them, so they belong with the agent rather than with any one log source.
+  #
+  # config_logs' default entrypoint REMOVES any older log-source files of those names as part of
+  # installing its own. That removal is not tidiness: Alloy loads every *.alloy in the directory
+  # into one component namespace, so two files declaring the same block is a hard config-load
+  # failure for the whole agent ("block local.file_match.systemlogs already declared").
+  loop:
+    - config.alloy.j2
+    - targets.alloy.j2
+    - service_alloy.alloy.j2
+    - metrics_system.alloy.j2
+    - metrics_docker.alloy.j2
+  loop_control:
+    loop_var: config_file
+  # RESTART, NOT RELOAD. The unit's ExecReload is `kill -HUP`, and Alloy's SIGHUP re-evaluates the
+  # component graph but does NOT re-apply `external_labels` on prometheus.remote_write /
+  # loki.write — those are fixed when the write component is constructed. A reload after an
+  # external_labels change exits 0, the config on disk is correct, and the running process keeps
+  # writing the OLD labels.
+  #
+  # A step that looks like it applied the change and cannot is a silent guard. Restart costs a few seconds of gap in a log/metric stream; a config that never takes
+  # effect costs however long it takes someone to notice.
+  notify: Restart Alloy
+
+- name: Update config file location
+  ansible.builtin.lineinfile:
+    path: "{{ alloy_env_file }}"
+    regexp: "^CONFIG_FILE=.*"
+    line: 'CONFIG_FILE="{{ alloy_config_dir }}"'
+    state: present
+  notify: Restart Alloy
+
+- name: Update CLI args
+  ansible.builtin.lineinfile:
+    path: "{{ alloy_env_file }}"
+    regexp: "^CUSTOM_ARGS=.*"
+    line: 'CUSTOM_ARGS="{{ alloy_cli_args | join('' '') }}"'
+    state: present
+  notify: Restart Alloy

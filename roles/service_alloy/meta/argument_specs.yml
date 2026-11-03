@@ -1,0 +1,91 @@
+---
+# AUTO-GENERATED argument spec — DO NOT EDIT.
+#
+# Source of truth: roles/service_alloy/meta/argument_specs.py
+# Regenerate:      venv/bin/python tools/argspec/cli.py x generate service_alloy
+#
+# Edits here are silently overwritten on the next generation. To change a value or its
+# documentation, change the OptionSpec in the source file above — descriptions there
+# are emitted as the comments in this file.
+argument_specs:
+  main:
+    short_description: Installs Grafana Alloy
+    version_added: '1.0'
+    author: Collection maintainers
+    options:
+      alloy_cli_args:
+        type: list
+        required: true
+        elements: str
+      alloy_config:
+        type: dict
+        required: true
+        options:
+          loki_url:
+            type: str
+            required: true
+          prometheus_url:
+            type: str
+            required: true
+          platform:
+            type: str
+            required: true
+            choices:
+              - real
+              - vm
+              - docker
+          parent_hostname:
+            type: str
+            required: false
+          hostname_override:
+            type: str
+            required: false
+          logs_journal:
+            type: dict
+            required: false
+            options:
+              max_age:
+                type: str
+                required: false
+                default: 24h0m0s
+          metrics_docker:
+            type: dict
+            required: false
+            options:
+              containerd_host:
+                type: str
+                required: false
+                default: unix:///run/containerd/containerd.sock
+              storage_duration:
+                type: str
+                required: false
+                default: 5m
+              scrape_interval:
+                type: str
+                required: false
+                default: 10s
+          metrics_system:
+            type: dict
+            required: false
+            options:
+              scrape_interval:
+                type: str
+                required: false
+                default: 15s
+              enable_collectors:
+                type: list
+                required: false
+                elements: str
+              disable_collectors:
+                type: list
+                required: false
+                elements: str
+              textfile_directory:
+                type: str
+                required: false
+                default: /var/lib/node_exporter/textfile_collector
+  uninstall:
+    short_description: Uninstalls Grafana Alloy
+    version_added: '1.0'
+    author: Collection maintainers
+    options: {}

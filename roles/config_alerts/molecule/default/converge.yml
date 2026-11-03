@@ -1,0 +1,162 @@
+# Exercise the role's OWN rendering path, with no Prometheus and no docker.
+#
+# NOTHING IS INSTALLED ANYWHERE REAL. config_alerts_dir points at a temp dir, validation and reload
+# are off (both need the prometheus container), so nothing outside a temp dir is touched.
+#
+# The thing under test is the property the whole role exists for: rule text — including GO template
+# expressions that are a Jinja SYNTAX ERROR — must reach the file verbatim. That is why the content
+# is built with to_nice_yaml + copy(content=) rather than `template:`, and a regression to
+# `template:` must turn this scenario red rather than silently mangling annotations.
+---
+- name: Converge
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    _tmp: /tmp/molecule-config-alerts
+
+  tasks:
+    - name: Make a render dir
+      ansible.builtin.file:
+        path: "{{ _tmp }}"
+        state: directory
+        mode: "0755"
+
+    - name: Load the role's generated defaults
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/../../defaults/main.yml"
+
+    # --- 1. install an owner, with Go templating in the annotations -------------------------------
+    - name: Install rules for a first owner
+      # include_role, not a hand-rolled copy of the role's logic: a scenario that re-derives the
+      # role's own expression over a stub list asserts a copy against itself and stays green while
+      # the role regresses.
+      ansible.builtin.include_role:
+        name: config_alerts
+      vars:
+        config_alerts_owner: molecule-owner-a
+        config_alerts_dir: "{{ _tmp }}/rules"
+        config_alerts_validate: false
+        config_alerts_reload: false
+        config_alerts_groups:
+          - name: molecule-a
+            rules:
+              - alert: GoTemplateSurvives
+                expr: 'up{job="probe"} == 0'
+                for: 5m
+                labels: { severity: critical }
+                annotations:
+                  # Go template syntax — `{{ ... }}` with a `$`. If anything renders this as Jinja
+                  # it is either a hard error (unexpected char '$') or silently emptied.
+                  summary: "{% raw %}{{ or $labels.node $labels.instance }}{% endraw %} is down"
+                  description: "{% raw %}{{ $value | humanize }}{% endraw %} percent used"
+
+    # --- 2. a SECOND owner, reusing the same group name -------------------------------------------
+    - name: Install rules for a second owner that reuses the first one's group name
+      # Proves owners are independent: two files, and the second does not overwrite or disturb the
+      # first. Reusing the group name is deliberate — promtool accepts it across separate files,
+      # and the role must not invent a restriction Prometheus does not have.
+      ansible.builtin.include_role:
+        name: config_alerts
+      vars:
+        config_alerts_owner: molecule-owner-b
+        config_alerts_dir: "{{ _tmp }}/rules"
+        config_alerts_validate: false
+        config_alerts_reload: false
+        config_alerts_groups:
+          - name: molecule-a
+            rules:
+              - alert: SecondOwnerRule
+                expr: vector(1)
+
+    # --- 3. removal by the owner ------------------------------------------------------------------
+    - name: Install then remove a third owner
+      ansible.builtin.include_role:
+        name: config_alerts
+      vars:
+        config_alerts_owner: molecule-owner-c
+        config_alerts_dir: "{{ _tmp }}/rules"
+        config_alerts_validate: false
+        config_alerts_reload: false
+        config_alerts_groups:
+          - name: molecule-c
+            rules:
+              - alert: ToBeRemoved
+                expr: vector(1)
+
+    - name: Confirm owner C exists before removal
+      # Without this the removal assertion in verify.yml would pass just as happily against a file
+      # that was never created — absence proves nothing on its own.
+      ansible.builtin.stat:
+        path: "{{ _tmp }}/rules/molecule-owner-c.yml"
+      register: _c_before
+
+    - name: Remove owner C
+      ansible.builtin.include_role:
+        name: config_alerts
+      vars:
+        config_alerts_owner: molecule-owner-c
+        config_alerts_dir: "{{ _tmp }}/rules"
+        config_alerts_state: absent
+        config_alerts_validate: false
+        config_alerts_reload: false
+
+    # --- 4. the owner-name guard MUST reject a traversal attempt ----------------------------------
+    # `ignore_errors` on an include_role does NOT catch a failure raised by a task INSIDE the
+    # included role — the include itself succeeded. block/rescue is what actually catches it, and
+    # getting this wrong makes a guard test look like a broken role.
+    - name: A path-traversal owner name is rejected
+      block:
+        - name: Attempt to install with a traversing owner name
+          ansible.builtin.include_role:
+            name: config_alerts
+          vars:
+            config_alerts_owner: "../escaped"
+            config_alerts_dir: "{{ _tmp }}/rules"
+            config_alerts_validate: false
+            config_alerts_reload: false
+            config_alerts_groups:
+              - name: nope
+                rules: [{alert: Nope, expr: vector(1)}]
+
+        - name: The traversal guard did NOT fire
+          ansible.builtin.set_fact:
+            _traversal_failed: false
+      rescue:
+        - name: The traversal guard fired, as required
+          ansible.builtin.set_fact:
+            _traversal_failed: true
+
+    # --- 5. present-with-no-rules MUST be refused --------------------------------------------------
+    - name: An empty rule set with state=present is rejected
+      # Writing an empty file would silently remove an owner's entire coverage while reporting ok.
+      block:
+        - name: Attempt to install an empty rule set
+          ansible.builtin.include_role:
+            name: config_alerts
+          vars:
+            config_alerts_owner: molecule-owner-empty
+            config_alerts_dir: "{{ _tmp }}/rules"
+            config_alerts_validate: false
+            config_alerts_reload: false
+            config_alerts_groups: []
+
+        - name: The empty-ruleset guard did NOT fire
+          ansible.builtin.set_fact:
+            _empty_failed: false
+      rescue:
+        - name: The empty-ruleset guard fired, as required
+          ansible.builtin.set_fact:
+            _empty_failed: true
+
+    - name: Hand the results to verify.yml
+      # set_fact does not cross molecule's converge/verify playbook boundary; a file does.
+      ansible.builtin.copy:
+        dest: "{{ _tmp }}/results.json"
+        mode: "0644"
+        content: |
+          {{ {
+               'c_existed_before_removal': _c_before.stat.exists,
+               'traversal_failed': _traversal_failed,
+               'empty_failed': _empty_failed,
+             } | to_nice_json }}

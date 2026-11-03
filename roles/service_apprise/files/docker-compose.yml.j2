@@ -1,0 +1,38 @@
+services:
+  {{ apprise_container_name }}:
+    image: {{ apprise_image }}
+    container_name: {{ apprise_container_name }}
+    restart: unless-stopped
+    environment:
+      TZ: "{{ apprise_tz }}"
+      APPRISE_STATEFUL_MODE: "{{ apprise_stateful_mode }}"
+      PUID: "{{ apprise_puid }}"
+      PGID: "{{ apprise_pgid }}"
+    volumes:
+      - {{ apprise_config_dir }}/config:/config
+      - {{ apprise_config_dir }}/plugin:/plugin
+      - {{ apprise_config_dir }}/attach:/attach
+{% if not apprise_traefik_enabled and apprise_host_port | int > 0 %}
+    ports:
+      - "{{ (apprise_bind_address ~ ':') if apprise_bind_address | length > 0 else '' }}{{ apprise_host_port }}:8000"
+{% endif %}
+    networks:
+      - {{ apprise_network }}
+{% if apprise_traefik_enabled %}
+      - {{ apprise_traefik_network }}
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: "{{ apprise_traefik_network }}"
+      traefik.http.routers.apprise.entrypoints: "websecure"
+      traefik.http.routers.apprise.rule: "Host(`{{ apprise_traefik_host }}`)"
+      traefik.http.routers.apprise.tls: "true"
+      traefik.http.services.apprise.loadbalancer.server.port: "8000"
+{% endif %}
+
+networks:
+  {{ apprise_network }}:
+    external: true
+{% if apprise_traefik_enabled %}
+  {{ apprise_traefik_network }}:
+    external: true
+{% endif %}

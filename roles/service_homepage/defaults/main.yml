@@ -1,0 +1,55 @@
+---
+homepage_container_name: homepage
+# Pinned — never :latest. Bump deliberately.
+homepage_image: "ghcr.io/gethomepage/homepage:v1.4.3"
+
+homepage_config_dir: "/opt/homepage"
+
+# Shared external docker network the monitoring services join. Homepage is published on a host
+# port, for a reverse proxy elsewhere to front it.
+homepage_network: monitoring
+homepage_host_port: 3010
+
+# PUID/PGID/TZ for the container.
+homepage_puid: 1000
+homepage_pgid: 1000
+homepage_umask: "002"
+homepage_tz: "Etc/UTC"
+
+# HOMEPAGE_ALLOWED_HOSTS: homepage validates the incoming Host header against this list (a hardening
+# feature it ships with). Set it to every name the page is reached by (public name, internal name,
+# with port where one is used). Empty leaves homepage's own default (localhost only).
+homepage_allowed_hosts: ""
+
+# --- dashboard content ---------------------------------------------------------------------------
+homepage_title: "Homepage"
+homepage_description: ""
+homepage_instance_name: "homepage"
+
+# Controller directory of config templates (services/settings/bookmarks/widgets/docker .yaml[.j2])
+# that REPLACES the role's default set. The cards are installation data, so the role's own default
+# is an empty page.
+homepage_config_src: ""
+
+# Regexes no service card href may match (hosts known to be dead or retired), checked before any
+# deploy. And one regex no bookmark href may match (typically your own domain: a link there belongs
+# in services.yaml as a card with its siteMonitor). Both empty by default.
+homepage_forbidden_href_patterns: []
+homepage_bookmarks_forbidden_href_pattern: ""
+
+# --- widget API keys (optional; from a secret store, never hardcoded) ----------------------------
+# Leave empty to omit a widget's `key:`/`password:` field entirely — tasks/main.yml drops the field
+# from the rendered YAML rather than writing an empty string, so an unset key means "no widget
+# credentials", not "widget configured with a blank key". Only a caller's own services.yaml.j2
+# references them; the role's default page has no widgets.
+homepage_sonarr_api_key: ""
+homepage_radarr_api_key: ""
+homepage_prowlarr_api_key: ""
+homepage_sabnzbd_api_key: ""
+
+# Proxmox API token for Proxmox node widgets (optional, same reasoning as the keys above).
+homepage_proxmox_token_id: ""
+homepage_proxmox_token_secret: ""
+
+# Home Assistant long-lived access token for its widget (optional).
+homepage_homeassistant_token: ""

@@ -1,0 +1,21 @@
+---
+- name: Stop and Disable
+  ansible.builtin.systemd_service:
+    service: alloy.service
+    state: stopped
+    enabled: false
+
+- name: Uninstall Alloy
+  ansible.builtin.apt:
+    name: alloy
+    state: absent
+
+- name: Remove config
+  ansible.builtin.file:
+    path: "{{ alloy_config_dir }}"
+    state: absent
+
+- name: Remove data
+  ansible.builtin.file:
+    path: "{{ alloy_storage_dir }}"
+    state: absent

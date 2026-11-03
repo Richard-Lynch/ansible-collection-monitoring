@@ -1,0 +1,56 @@
+---
+- name: Ensure apt keyrings dir exists
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: "0755"
+
+- name: Ensure GPG tooling is present
+  ansible.builtin.apt:
+    name: gnupg # or "gpg" if you prefer just the binary
+    state: present
+    update_cache: true
+
+- name: Fetch Grafana key
+  ansible.builtin.get_url:
+    url: https://apt.grafana.com/gpg.key
+    dest: /etc/apt/keyrings/grafana.asc
+    mode: "0644"
+
+- name: Dearmor Grafana key
+  ansible.builtin.command:
+    cmd: >
+      gpg --dearmor
+          --output /etc/apt/keyrings/grafana.gpg
+          /etc/apt/keyrings/grafana.asc
+  args:
+    creates: /etc/apt/keyrings/grafana.gpg
+
+- name: Ensure keyring is world-readable (apt needs this)
+  ansible.builtin.file:
+    path: /etc/apt/keyrings/grafana.gpg
+    mode: "0644"
+
+- name: Add Grafana repo (Deb822)
+  ansible.builtin.deb822_repository:
+    name: grafana
+    types: [deb]
+    uris: ["https://apt.grafana.com"]
+    suites: ["stable"]
+    components: ["main"]
+    signed_by: /etc/apt/keyrings/grafana.gpg
+    state: present
+    enabled: true
+
+- name: Install Alloy
+  # PINNED to alloy_version (set it once for the whole fleet in inventory) unless it is "latest".
+  # Without a version, apt installs whatever the repo serves that day, and hosts built at different
+  # times end up on different versions with nothing reconciling them.
+  #
+  # `allow_downgrade` so that lowering the pin actually takes effect — otherwise a host ahead of
+  # the pin silently stays ahead and the pin quietly means "at least", which is not what a pin is.
+  ansible.builtin.apt:
+    name: "{{ 'alloy' if (alloy_version | default('latest')) == 'latest' else 'alloy=' ~ alloy_version }}"
+    state: present
+    allow_downgrade: true
+    update_cache: true

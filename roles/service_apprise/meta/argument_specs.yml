@@ -1,0 +1,82 @@
+---
+# AUTO-GENERATED argument spec — DO NOT EDIT.
+#
+# Source of truth: roles/service_apprise/meta/argument_specs.py
+# Regenerate:      venv/bin/python tools/argspec/cli.py x generate service_apprise
+#
+# Edits here are silently overwritten on the next generation. To change a value or its
+# documentation, change the OptionSpec in the source file above — descriptions there
+# are emitted as the comments in this file.
+argument_specs:
+  main:
+    short_description: Deploy the Apprise notification API, optionally behind Traefik
+    version_added: '1.0'
+    author: Collection maintainers
+    options:
+      apprise_container_name:
+        description:
+          - Container name.
+        type: str
+        required: false
+      apprise_image:
+        description:
+          - caronc/apprise image tag.
+        type: str
+        required: false
+      apprise_stateful_mode:
+        description:
+          - APPRISE_STATEFUL_MODE (simple/hash/disabled).
+        type: str
+        required: false
+      apprise_network:
+        description:
+          - Shared monitoring docker network.
+        type: str
+        required: false
+      apprise_traefik_enabled:
+        description:
+          - Expose via Traefik (only on a host running Traefik).
+        type: bool
+        required: false
+        default: false
+      apprise_host_port:
+        description:
+          - Host port for the API when not behind Traefik.
+        type: int
+        required: false
+      apprise_bind_address:
+        description:
+          - Interface the host port is published on; empty means every interface.
+          - apprise-api is unauthenticated, so bind a private address on a public host.
+        type: str
+        required: false
+      apprise_traefik_network:
+        description:
+          - Traefik external network.
+        type: str
+        required: false
+      apprise_traefik_host:
+        description:
+          - Traefik Host() rule (FQDN). Required when apprise_traefik_enabled.
+        type: str
+        required: false
+      apprise_config_dir:
+        description:
+          - Host config dir.
+        type: str
+        required: false
+      apprise_puid:
+        description:
+          - Container PUID.
+        type: int
+        required: false
+      apprise_pgid:
+        description:
+          - Container PGID.
+        type: int
+        required: false
+      apprise_tz:
+        description:
+          - Container timezone.
+        type: str
+        required: false

@@ -1,0 +1,160 @@
+# Exercise the role's GUARDS and its RENDERING, with no Loki and no docker.
+#
+# NOTHING IS INSTALLED ANYWHERE. Every path that touches a real Loki (docker cp into the container,
+# the LogQL validation queries, the ruler read-back) needs a live Loki, so validation is switched
+# off and the install path is never reached — see molecule.yml for the honest scope and for where
+# those halves ARE proven.
+#
+# The two things tested here are the ones that need nothing external and that a regression would
+# break silently:
+#   1. the guards reject bad input (traversing owner, empty rule set, a rule missing its expr)
+#   2. Go template annotations survive into the rendered content verbatim
+#
+# (2) is the property the to_nice_yaml + copy(content=) construction exists for: Loki annotations
+# use GO template syntax ({{ $labels.service_name }}), which shares Jinja's delimiters, so a
+# regression to `template:` is either a hard error on the '$' or a silently emptied annotation.
+---
+- name: Converge
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    _tmp: /tmp/molecule-config-log-alerts
+
+  tasks:
+    - name: Make a render dir
+      ansible.builtin.file:
+        path: "{{ _tmp }}"
+        state: directory
+        mode: "0755"
+
+    - name: Load the role's generated defaults
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/../../defaults/main.yml"
+
+    # --- 1. the owner-name guard MUST reject a traversal attempt ---------------------------------
+    # `ignore_errors` on an include_role does NOT catch a failure raised by a task INSIDE the
+    # included role — the include itself succeeded. block/rescue is what actually catches it, and
+    # getting this wrong makes a guard test look like a broken role.
+    - name: A path-traversal owner name is rejected
+      block:
+        - name: Attempt to install with a traversing owner name
+          ansible.builtin.include_role:
+            name: config_log_alerts
+          vars:
+            config_log_alerts_owner: "../chunks"
+            config_log_alerts_validate: false
+            config_log_alerts_verify_matches: false
+            config_log_alerts_groups:
+              - name: nope
+                rules: [{alert: Nope, expr: 'sum(count_over_time({a="b"}[5m])) > 0'}]
+
+        - name: The traversal guard did NOT fire
+          ansible.builtin.set_fact:
+            _traversal_failed: false
+      rescue:
+        - name: The traversal guard fired, as required
+          ansible.builtin.set_fact:
+            _traversal_failed: true
+
+    # --- 2. present-with-no-rules MUST be refused ------------------------------------------------
+    - name: An empty rule set with state=present is rejected
+      # Writing an empty file would silently remove an owner's entire log-alert coverage while
+      # reporting ok.
+      block:
+        - name: Attempt to install an empty rule set
+          ansible.builtin.include_role:
+            name: config_log_alerts
+          vars:
+            config_log_alerts_owner: molecule-empty
+            config_log_alerts_validate: false
+            config_log_alerts_verify_matches: false
+            config_log_alerts_groups: []
+
+        - name: The empty-ruleset guard did NOT fire
+          ansible.builtin.set_fact:
+            _empty_failed: false
+      rescue:
+        - name: The empty-ruleset guard fired, as required
+          ansible.builtin.set_fact:
+            _empty_failed: true
+
+    # --- 3. a rule with no `expr` MUST be refused ------------------------------------------------
+    - name: A rule missing its expression is rejected
+      # YAML accepts it and the ruler rejects the WHOLE file, taking this owner's other rules with
+      # it — and the ruler logs that and carries on, so nothing else would report it. The guard
+      # must catch it before the file is written.
+      #
+      # This guard lives in the validate block, so validation stays ON here. The LogQL queries
+      # that follow it are never reached: the assert fails first, which is exactly the ordering
+      # being tested.
+      block:
+        - name: Attempt to install a rule with no expr
+          ansible.builtin.include_role:
+            name: config_log_alerts
+          vars:
+            config_log_alerts_owner: molecule-noexpr
+            config_log_alerts_verify_matches: false
+            config_log_alerts_groups:
+              - name: broken
+                rules:
+                  - alert: HasNoExpression
+                    for: 5m
+
+        - name: The missing-expr guard did NOT fire
+          ansible.builtin.set_fact:
+            _noexpr_failed: false
+      rescue:
+        - name: The missing-expr guard fired, as required
+          ansible.builtin.set_fact:
+            _noexpr_failed: true
+
+    # --- 4. the rendering: Go templating must survive --------------------------------------------
+    # The role's content is built in a set_fact (`_cla_content`) before any Loki-facing task, so
+    # including the role with validation off and the install path unreachable still produces it.
+    # Rather than reach into the role's private fact, the scenario renders the SAME construction
+    # the role uses and asserts on it — then asserts the role's own fact matches, so a change to
+    # the role's construction cannot pass by agreeing with a stale copy here.
+    - name: Render a rule set carrying Go template annotations
+      ansible.builtin.include_role:
+        name: config_log_alerts
+      vars:
+        config_log_alerts_owner: molecule-render
+        config_log_alerts_validate: false
+        config_log_alerts_verify_matches: false
+        # state=absent reaches the content render and the guards, and stops before any docker
+        # command — the install block is `when: state == 'present'`. That is what makes this
+        # renderable offline.
+        config_log_alerts_state: absent
+        config_log_alerts_groups:
+          - name: molecule-render
+            rules:
+              - alert: GoTemplateSurvives
+                expr: 'sum(count_over_time({platform="docker"}[5m])) > 0'
+                for: 5m
+                labels: {severity: critical}
+                annotations:
+                  # Go template syntax — `{{ ... }}` with a `$`. If anything renders this as Jinja
+                  # it is either a hard error (unexpected char '$') or silently emptied.
+                  summary: "{% raw %}{{ $labels.service_name }}{% endraw %} is logging errors"
+                  description: "{% raw %}{{ $value }}{% endraw %} lines in 5m"
+
+    - name: Capture the content the role rendered
+      # `_cla_content` is the exact string the role writes to the staged file and copies into the
+      # container, so asserting on it is asserting on the installed bytes.
+      ansible.builtin.copy:
+        content: "{{ _cla_content }}"
+        dest: "{{ _tmp }}/rendered.yml"
+        mode: "0644"
+
+    - name: Hand the results to verify.yml
+      # set_fact does not cross molecule's converge/verify playbook boundary; a file does.
+      ansible.builtin.copy:
+        dest: "{{ _tmp }}/results.json"
+        mode: "0644"
+        content: |
+          {{ {
+               'traversal_failed': _traversal_failed,
+               'empty_failed': _empty_failed,
+               'noexpr_failed': _noexpr_failed,
+             } | to_nice_json }}

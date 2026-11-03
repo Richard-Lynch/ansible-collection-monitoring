@@ -1,0 +1,102 @@
+---
+# AUTO-GENERATED argument spec — DO NOT EDIT.
+#
+# Source of truth: roles/textfile_exporters/meta/argument_specs.py
+# Regenerate:      venv/bin/python tools/argspec/cli.py x generate textfile_exporters
+#
+# Edits here are silently overwritten on the next generation. To change a value or its
+# documentation, change the OptionSpec in the source file above — descriptions there
+# are emitted as the comments in this file.
+argument_specs:
+  main:
+    short_description: 'Prometheus textfile exporters: GPU, Docker, WAN IP, WireGuard, HA recorder'
+    version_added: '1.0'
+    author: Collection maintainers
+    options:
+      txe_gpu:
+        type: bool
+        required: false
+        default: false
+      txe_docker:
+        type: bool
+        required: false
+        default: false
+      txe_wireguard:
+        description:
+          - 'Export WireGuard tunnel state. For the MONITORED end of a site link: when'
+          - the far end has no other monitoring, 'is the tunnel up' must not itself
+          - depend on the tunnel.
+        type: bool
+        required: false
+        default: false
+      txe_wireguard_interface:
+        description:
+          - Which interface to report on.
+        type: str
+        required: false
+        default: wg0
+      txe_wan_ip:
+        description:
+          - Export the site's public egress IP. Intended for ONE host behind the
+          - uplink — the address is a property of the uplink, not of the host, so
+          - running it everywhere would emit N identical series.
+        type: bool
+        required: false
+        default: false
+      txe_wan_ip_expected:
+        description:
+          - The address something else pins (e.g. a source-IP allow or bypass
+          - policy). When set, the exporter also emits whether reality still matches it.
+          - Empty means 'export the address but assert nothing about it'.
+        type: str
+        required: false
+        default: ''
+      txe_ha_recorder:
+        description:
+          - Export how stale Home Assistant's recorder is. Intended for ONE host, and
+          - 'deliberately NOT the HAOS box: an exporter must not depend on the thing it'
+          - watches, or a dead HA produces no metric and absence is indistinguishable
+          - from a dead exporter. Run it from a monitoring host.
+          - Exists because HA's own prometheus integration exports entity states and
+          - NOTHING about whether history is being persisted, so no Prometheus-only
+          - rule can see a recorder that has stopped writing.
+        type: bool
+        required: false
+        default: false
+      txe_ha_recorder_base_url:
+        description:
+          - Home Assistant's base URL, e.g. http://ha.example.test:8123. Installation
+          - config, so it is passed in rather than defaulted to any one address.
+          - Required when txe_ha_recorder is true.
+        type: str
+        required: false
+        default: ''
+      txe_ha_recorder_token_file:
+        description:
+          - Path on the TARGET holding HA's long-lived token, mode 0600. A path, not
+          - 'the token itself: argv is world-readable via /proc, so the value must never'
+          - reach a command line.
+        type: str
+        required: false
+        default: /etc/ha-recorder-exporter/token
+      txe_ha_recorder_window_seconds:
+        description:
+          - How far back to ask the logbook. Deliberately SHORT. /api/logbook/<since>
+          - silently caps a response at ~24h from `since`, so the newest row returned
+          - tracks the START of the window -- a long value here reports a healthy
+          - recorder as days stale.
+        type: int
+        required: false
+        default: 3600
+      txe_collector_dir:
+        type: str
+        required: false
+        default: /var/lib/node_exporter/textfile_collector
+      txe_interval:
+        type: str
+        required: false
+        default: 30s
+      txe_apply:
+        type: bool
+        required: false
+        default: false

@@ -1,0 +1,65 @@
+---
+# AUTO-GENERATED defaults resolver — DO NOT EDIT.
+#
+# Source of truth: roles/config_log_backfill/meta/argument_specs.py
+# Regenerate:      venv/bin/python tools/argspec/cli.py x generate config_log_backfill
+#
+# Edits here are silently overwritten on the next generation. To change a value or its
+# documentation, change the OptionSpec in the source file above — descriptions there
+# are emitted as the comments in this file.
+
+# Binds every declared option to its generated default, so a caller-supplied value
+# wins and an unsupplied one falls back rather than evaluating Undefined.
+#
+# Include this FIRST from every entrypoint:
+#   - ansible.builtin.include_tasks: _resolve_defaults.yml
+#
+# Role-specific setup logic belongs in tasks/setup_vars.yml, NOT here — this file is
+# overwritten on every generation.
+#
+# TWO BRANCHES, because `set_fact` persists for the whole play. A role invoked twice in
+# one play would otherwise see its OWN leftover facts on the second call, so a later
+# caller that omitted an option silently inherited the earlier caller's value instead of
+# the declared default. On a repeat call this ignores the role's own facts and rebinds
+# the defaults; an include-level `vars:` shadows the fact, so a value the caller DID
+# supply this time still wins. Roles called once per play only ever run the first branch.
+
+- name: Resolve declared options over their generated defaults
+  ansible.builtin.set_fact:
+    config_log_backfill_action: "{{ config_log_backfill_action | default(config_log_backfill_action__default) if config_log_backfill_action__default is defined else config_log_backfill_action | default(omit) }}"
+    config_log_backfill_apply: "{{ config_log_backfill_apply | default(config_log_backfill_apply__default) if config_log_backfill_apply__default is defined else config_log_backfill_apply | default(omit) }}"
+    config_log_backfill_since: "{{ config_log_backfill_since | default(config_log_backfill_since__default) if config_log_backfill_since__default is defined else config_log_backfill_since | default(omit) }}"
+    config_log_backfill_max_age_margin: "{{ config_log_backfill_max_age_margin | default(config_log_backfill_max_age_margin__default) if config_log_backfill_max_age_margin__default is defined else config_log_backfill_max_age_margin | default(omit) }}"
+    config_log_backfill_end: "{{ config_log_backfill_end | default(config_log_backfill_end__default) if config_log_backfill_end__default is defined else config_log_backfill_end | default(omit) }}"
+    config_log_backfill_label: "{{ config_log_backfill_label | default(config_log_backfill_label__default) if config_log_backfill_label__default is defined else config_log_backfill_label | default(omit) }}"
+    config_log_backfill_redact: "{{ config_log_backfill_redact | default(config_log_backfill_redact__default) if config_log_backfill_redact__default is defined else config_log_backfill_redact | default(omit) }}"
+    config_log_backfill_audit_terms: "{{ config_log_backfill_audit_terms | default(config_log_backfill_audit_terms__default) if config_log_backfill_audit_terms__default is defined else config_log_backfill_audit_terms | default(omit) }}"
+    config_log_backfill_spot_checks: "{{ config_log_backfill_spot_checks | default(config_log_backfill_spot_checks__default) if config_log_backfill_spot_checks__default is defined else config_log_backfill_spot_checks | default(omit) }}"
+    config_log_backfill_verify_wait: "{{ config_log_backfill_verify_wait | default(config_log_backfill_verify_wait__default) if config_log_backfill_verify_wait__default is defined else config_log_backfill_verify_wait | default(omit) }}"
+    config_log_backfill_verify_interval: "{{ config_log_backfill_verify_interval | default(config_log_backfill_verify_interval__default) if config_log_backfill_verify_interval__default is defined else config_log_backfill_verify_interval | default(omit) }}"
+    config_log_backfill_batch_bytes: "{{ config_log_backfill_batch_bytes | default(config_log_backfill_batch_bytes__default) if config_log_backfill_batch_bytes__default is defined else config_log_backfill_batch_bytes | default(omit) }}"
+    config_log_backfill_rate_fraction: "{{ config_log_backfill_rate_fraction | default(config_log_backfill_rate_fraction__default) if config_log_backfill_rate_fraction__default is defined else config_log_backfill_rate_fraction | default(omit) }}"
+    config_log_backfill_python: "{{ config_log_backfill_python | default(config_log_backfill_python__default) if config_log_backfill_python__default is defined else config_log_backfill_python | default(omit) }}"
+  when: not (_config_log_backfill__argspec_resolved | default(false))
+
+- name: Rebind the defaults on a repeat call, ignoring this role's own leftover facts
+  ansible.builtin.set_fact:
+    config_log_backfill_action: "{{ config_log_backfill_action__default if config_log_backfill_action__default is defined else config_log_backfill_action | default(omit) }}"
+    config_log_backfill_apply: "{{ config_log_backfill_apply__default if config_log_backfill_apply__default is defined else config_log_backfill_apply | default(omit) }}"
+    config_log_backfill_since: "{{ config_log_backfill_since__default if config_log_backfill_since__default is defined else config_log_backfill_since | default(omit) }}"
+    config_log_backfill_max_age_margin: "{{ config_log_backfill_max_age_margin__default if config_log_backfill_max_age_margin__default is defined else config_log_backfill_max_age_margin | default(omit) }}"
+    config_log_backfill_end: "{{ config_log_backfill_end__default if config_log_backfill_end__default is defined else config_log_backfill_end | default(omit) }}"
+    config_log_backfill_label: "{{ config_log_backfill_label__default if config_log_backfill_label__default is defined else config_log_backfill_label | default(omit) }}"
+    config_log_backfill_redact: "{{ config_log_backfill_redact__default if config_log_backfill_redact__default is defined else config_log_backfill_redact | default(omit) }}"
+    config_log_backfill_audit_terms: "{{ config_log_backfill_audit_terms__default if config_log_backfill_audit_terms__default is defined else config_log_backfill_audit_terms | default(omit) }}"
+    config_log_backfill_spot_checks: "{{ config_log_backfill_spot_checks__default if config_log_backfill_spot_checks__default is defined else config_log_backfill_spot_checks | default(omit) }}"
+    config_log_backfill_verify_wait: "{{ config_log_backfill_verify_wait__default if config_log_backfill_verify_wait__default is defined else config_log_backfill_verify_wait | default(omit) }}"
+    config_log_backfill_verify_interval: "{{ config_log_backfill_verify_interval__default if config_log_backfill_verify_interval__default is defined else config_log_backfill_verify_interval | default(omit) }}"
+    config_log_backfill_batch_bytes: "{{ config_log_backfill_batch_bytes__default if config_log_backfill_batch_bytes__default is defined else config_log_backfill_batch_bytes | default(omit) }}"
+    config_log_backfill_rate_fraction: "{{ config_log_backfill_rate_fraction__default if config_log_backfill_rate_fraction__default is defined else config_log_backfill_rate_fraction | default(omit) }}"
+    config_log_backfill_python: "{{ config_log_backfill_python__default if config_log_backfill_python__default is defined else config_log_backfill_python | default(omit) }}"
+  when: _config_log_backfill__argspec_resolved | default(false)
+
+- name: Record that this role has resolved its options in this play
+  ansible.builtin.set_fact:
+    _config_log_backfill__argspec_resolved: true

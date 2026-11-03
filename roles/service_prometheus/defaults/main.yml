@@ -1,0 +1,31 @@
+---
+# AUTO-GENERATED defaults file — DO NOT EDIT.
+#
+# Source of truth: roles/service_prometheus/meta/argument_specs.py
+# Regenerate:      venv/bin/python tools/argspec/cli.py x generate service_prometheus
+#
+# Edits here are silently overwritten on the next generation. To change a value or its
+# documentation, change the OptionSpec in the source file above — descriptions there
+# are emitted as the comments in this file.
+# Entrypoint:      main
+
+# prom/prometheus image tag.
+prometheus_image_version__default: latest
+
+# Host port mapped to Prometheus 9090.
+prometheus_host_port__default: '9090'
+
+# TSDB retention by time (e.g. 30d).
+prometheus_retention_time__default: 30d
+
+# TSDB retention by size — hard ceiling so it can't fill the disk.
+prometheus_retention_size__default: 20GB
+
+# Shared external docker network the stack joins.
+prometheus_network__default: monitoring
+
+# DEFAULT TRUE, deliberately. The template wraps BOTH `alerting:` and `rule_files:` in this flag, so a false/absent value re-renders prometheus.yml with alerting REMOVED: Prometheus then loads zero alert rules, and a host looks monitored while it cannot alert. A default of false would mean 'does nothing', which for a monitoring stack is the opposite of safe.
+prometheus_alertmanager_enabled__default: true
+
+# Alertmanager endpoint Prometheus sends alerts to.
+prometheus_alertmanager_target__default: alertmanager:9093

@@ -1,0 +1,145 @@
+---
+# AUTO-GENERATED argument spec — DO NOT EDIT.
+#
+# Source of truth: roles/service_alert_manager/meta/argument_specs.py
+# Regenerate:      venv/bin/python tools/argspec/cli.py x generate service_alert_manager
+#
+# Edits here are silently overwritten on the next generation. To change a value or its
+# documentation, change the OptionSpec in the source file above — descriptions there
+# are emitted as the comments in this file.
+argument_specs:
+  main:
+    short_description: Deploy Prometheus Alertmanager routing to Apprise, with an external heartbeat
+    version_added: '1.0'
+    author: Collection maintainers
+    options:
+      alertmanager_container_name:
+        description:
+          - Container name.
+        type: str
+        required: false
+      alertmanager_image:
+        description:
+          - prom/alertmanager image tag.
+        type: str
+        required: false
+      alertmanager_host_port:
+        description:
+          - Host port → 9093.
+        type: int
+        required: false
+      alertmanager_bind_address:
+        description:
+          - Interface the host port is published on; empty means every interface.
+          - Alertmanager is unauthenticated, so bind a private address on a public host.
+        type: str
+        required: false
+      alertmanager_inhibit_rules:
+        description:
+          - Alertmanager inhibit_rules (source_matchers / target_matchers / equal),
+          - rendered verbatim. Empty means no inhibition.
+        type: list
+        required: false
+        elements: dict
+      alertmanager_discard_routes:
+        description:
+          - Child routes whose alerts reach Alertmanager but notify NOBODY, each a dict
+          - of `matchers` (Alertmanager matcher strings, ANDed) and `reason`. For
+          - alerts that exist to prove delivery (firing proofs). Empty means none.
+        type: list
+        required: false
+        elements: dict
+      alertmanager_network:
+        description:
+          - Shared monitoring network.
+        type: str
+        required: false
+      alertmanager_config_dir:
+        description:
+          - Host config dir.
+        type: str
+        required: false
+      alertmanager_resolve_timeout:
+        description:
+          - global.resolve_timeout.
+        type: str
+        required: false
+      alertmanager_apprise_url:
+        description:
+          - Apprise base URL.
+        type: str
+        required: false
+      alertmanager_apprise_config_id:
+        description:
+          - Apprise stateful config-id (notify target).
+        type: str
+        required: false
+      alertmanager_apprise_format:
+        description:
+          - Apprise notify format for the rendered payload (text|markdown|html).
+        type: str
+        required: false
+      alertmanager_group_wait:
+        description:
+          - route.group_wait.
+        type: str
+        required: false
+      alertmanager_group_interval:
+        description:
+          - route.group_interval.
+        type: str
+        required: false
+      alertmanager_repeat_interval:
+        description:
+          - route.repeat_interval.
+        type: str
+        required: false
+      alertmanager_notification_footer:
+        description:
+          - Last line of every notification body (e.g. where to start investigating).
+          - Plain text inside a Go template, so it must not contain `{{`. Empty = none.
+        type: str
+        required: false
+      alertmanager_heartbeat_enabled:
+        description:
+          - Route the always-firing Watchdog alert to an EXTERNAL heartbeat receiver.
+          - When false the Watchdog still fires but goes only to Apprise, which shares a
+          - failure domain with the stack it is meant to be watching.
+        type: bool
+        required: false
+      alertmanager_heartbeat_url:
+        description:
+          - Push URL of the external heartbeat monitor (e.g. an Uptime Kuma push check
+          - hosted OFF the monitored site). Alertmanager POSTs here every repeat_interval
+          - while the Watchdog fires; if the pushes stop, that service alerts.
+          - MUST NOT resolve to anything inside the monitored site, or it cannot report
+          - the site's own death.
+        type: str
+        required: false
+      alertmanager_heartbeat_interval:
+        description:
+          - How often the Watchdog re-notifies the heartbeat (route.repeat_interval for that branch).
+        type: str
+        required: false
+      alertmanager_heartbeat_mtls_enabled:
+        description:
+          - Present a client certificate (Cloudflare Access mTLS) on the heartbeat POST.
+          - Required if the heartbeat URL is a Cloudflare Access-protected hostname (the
+          - same tunnel+hostname the Kuma UI uses) rather than an unprotected path or a
+          - static-IP-allowlisted one. Off by default — choose a transport explicitly
+          - (this role's README, "Heartbeat transport").
+        type: bool
+        required: false
+      alertmanager_heartbeat_mtls_cert:
+        description:
+          - PEM client certificate content for Cloudflare Access mTLS, from a secret store.
+          - Written to a file under alertmanager_config_dir and referenced via tls_config
+          - in the rendered alertmanager.yml. Never logged (no_log on the writing task).
+        type: str
+        required: false
+      alertmanager_heartbeat_mtls_key:
+        description:
+          - PEM client private key content matching alertmanager_heartbeat_mtls_cert.
+          - 'Same handling as the cert: written to a 0600 file, never logged.'
+        type: str
+        required: false

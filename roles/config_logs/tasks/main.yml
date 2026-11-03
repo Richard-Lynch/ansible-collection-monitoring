@@ -1,0 +1,202 @@
+---
+# Register (or remove) ONE owner's log shipping as an Alloy drop-in. See meta/argument_specs.py for
+# the interface and README.md for the why. Runs on the SHIPPING host, not on the monitoring host.
+
+- name: Resolve declared options over their generated defaults
+  # GENERATED from meta/argument_specs.py — binds every declared option to its default, so a
+  # default can never be declared-but-dead (the variable evaluating Undefined at run time).
+  ansible.builtin.include_tasks: _resolve_defaults.yml
+
+- name: Validate the owner name
+  # The owner becomes both a filename and a component-id prefix. Alloy component ids allow letters,
+  # digits and underscores, so the hyphens allowed here are translated below rather than passed
+  # through. Explicit character set rather than a POSIX class: Ansible's regex filters are Python's
+  # re, which has no [:alnum:].
+  ansible.builtin.assert:
+    that:
+      - config_logs_owner is defined
+      - config_logs_owner | length > 0
+      - config_logs_owner is match('^[a-z0-9][a-z0-9-]*$')
+    fail_msg: >-
+      config_logs_owner must be a non-empty lowercase [a-z0-9-] identifier
+      (got '{{ config_logs_owner | default("<undefined>") }}').
+
+- name: Require sources when registering
+  # 'absent' legitimately passes none; 'present' with none would write a file declaring nothing and
+  # silently stop this owner's logs being shipped while reporting success.
+  ansible.builtin.assert:
+    that:
+      - config_logs_sources | length > 0
+    fail_msg: >-
+      config_logs_state=present requires config_logs_sources. Pass state=absent to stop shipping
+      owner '{{ config_logs_owner }}' instead of installing an empty drop-in.
+  when: config_logs_state == 'present'
+
+- name: Check every source is complete
+  # A source with no paths tails nothing. It renders as valid Alloy config that loads cleanly and
+  # ships zero lines — the symptom is missing logs, indistinguishable from an application that is
+  # simply quiet.
+  ansible.builtin.assert:
+    that:
+      - config_logs_sources | rejectattr('name', 'defined') | list | length == 0
+      - config_logs_sources | rejectattr('paths', 'defined') | list | length == 0
+      - config_logs_sources | selectattr('paths', 'defined') | map(attribute='paths') | select('equalto', []) | list | length == 0
+      - config_logs_sources | map(attribute='name') | list | length == config_logs_sources | map(attribute='name') | unique | list | length
+    fail_msg: >-
+      Every entry in config_logs_sources needs a `name` and a non-empty `paths` list, and names
+      must be unique within the owner. A source with no paths is valid config that ships nothing.
+  when: config_logs_state == 'present'
+
+- name: Set the owner's drop-in path and component prefix
+  ansible.builtin.set_fact:
+    _cl_path: "{{ config_logs_dir }}/logs_{{ config_logs_owner }}.alloy"
+    # Alloy component ids are identifiers: hyphens are not legal in them, but they ARE legal (and
+    # conventional) in an owner name. Translate rather than reject, so 'app-stack' does not have to
+    # become 'app_stack' at every call site and diverge from its config_alerts/config_metrics name.
+    _cl_prefix: "{{ config_logs_owner | replace('-', '_') }}"
+
+- name: Ensure the Alloy config directory exists
+  # Not created if missing in the absent case — a host with no Alloy has nothing to clean up.
+  ansible.builtin.file:
+    path: "{{ config_logs_dir }}"
+    state: directory
+    mode: "0755"
+  when: config_logs_state == 'present'
+
+# --- validate BEFORE installing -----------------------------------------------------------------
+# A syntax error in ANY file in this directory fails the WHOLE agent's config load, so a bad
+# drop-in takes down this host's metrics and logs together, not just this owner's. Validation
+# happens against a scratch copy outside the config directory so a bad file is never loadable even
+# briefly.
+- name: Validate the rendered drop-in
+  when:
+    - config_logs_state == 'present'
+    - config_logs_validate | bool
+  block:
+    - name: Render the drop-in to a scratch path
+      ansible.builtin.template:
+        src: logs_owner.alloy.j2
+        dest: "/tmp/config-logs-{{ config_logs_owner }}-candidate.alloy"
+        mode: "0644"
+      changed_when: false
+
+    - name: Check it with `alloy fmt`
+      # This rejects as well as accepts: valid config rc=0, malformed config rc=1. A validator that
+      # cannot fail is worth nothing.
+      ansible.builtin.command:
+        cmd: "alloy fmt /tmp/config-logs-{{ config_logs_owner }}-candidate.alloy"
+      register: _cl_fmt
+      changed_when: false
+      failed_when: false
+
+    - name: Fail when the drop-in is not valid Alloy config
+      # Gate on rc, never on stdout emptiness — `alloy fmt` writes the FORMATTED CONFIG to stdout on
+      # success, so a non-empty stdout is the success case here, not the failure one.
+      ansible.builtin.assert:
+        that:
+          - _cl_fmt.rc == 0
+        fail_msg: >-
+          alloy fmt rejected the drop-in for owner '{{ config_logs_owner }}'
+          (rc={{ _cl_fmt.rc }}). Nothing was installed. {{ _cl_fmt.stderr | default('') }}
+        success_msg: "alloy fmt accepted the drop-in for owner '{{ config_logs_owner }}'."
+
+  always:
+    - name: Remove the scratch copy
+      ansible.builtin.file:
+        path: "/tmp/config-logs-{{ config_logs_owner }}-candidate.alloy"
+        state: absent
+      failed_when: false
+
+# --- install / remove ---------------------------------------------------------------------------
+# RESTART, NOT RELOAD, and that is deliberate. Alloy's SIGHUP re-evaluates the component graph but
+# does NOT re-apply external_labels on loki.write, so a reload exits 0 while the agent keeps writing
+# the OLD labels and the play reports success.
+- name: Install this owner's log-shipping drop-in
+  ansible.builtin.template:
+    src: logs_owner.alloy.j2
+    dest: "{{ _cl_path }}"
+    mode: "0644"
+  register: _cl_installed
+  when: config_logs_state == 'present'
+  notify: Restart Alloy for config_logs
+
+- name: Remove this owner's log-shipping drop-in
+  ansible.builtin.file:
+    path: "{{ _cl_path }}"
+    state: absent
+  register: _cl_removed
+  when: config_logs_state == 'absent'
+  notify: Restart Alloy for config_logs
+
+# --- prove it took effect -------------------------------------------------------------------
+# Handlers run at play end, so the restart has NOT happened yet at this point in the file. Flush
+# them explicitly, then read the agent's own component graph — a drop-in on disk that Alloy never
+# loaded is worth nothing, and a restart that succeeded tells you nothing about whether the config
+# inside it was accepted.
+- name: Confirm Alloy loaded this owner's components
+  when:
+    - config_logs_state == 'present'
+    - config_logs_restart | bool
+    - (_cl_installed.changed | default(false))
+  block:
+    - name: Apply the restart now rather than at play end
+      ansible.builtin.meta: flush_handlers
+
+    - name: Ask Alloy which components it is running
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:12345/api/v0/web/components"
+        method: GET
+        return_content: true
+      register: _cl_components
+      # PARSED FROM `content`, NOT `.json` — same reason as tasks/default.yml. Alloy serves
+      # /api/v0/web/components as `text/plain; charset=utf-8`, so Ansible's uri module never
+      # populates `.json` for it, with or without `body_format: json`.
+      #
+      # `.json | default([])` would yield [] on EVERY attempt, so the `until:` could never be
+      # satisfied and the assert below would report every source missing on a host where all of
+      # them are loaded and healthy — aborting the play on a correct run.
+      until: >-
+        ((_cl_components.content | default('[]', true) | from_json | default([], true))
+         | map(attribute='localID') | list
+         | select('search', '\.' ~ _cl_prefix ~ '_') | list | length) >= (config_logs_sources | length)
+      retries: 12
+      delay: 5
+      failed_when: false
+
+    # A parse failure must never present as "no components are loaded" — [] from an unpopulated
+    # `.json` is indistinguishable from an agent running nothing. So assert the response was
+    # parseable AT ALL.
+    - name: HARD GATE — the components response must have been readable
+      ansible.builtin.assert:
+        that:
+          - _cl_components.status | default(0) == 200
+          - (_cl_components.content | default('')) | length > 0
+          - (_cl_components.content | from_json) is iterable
+        fail_msg: >-
+          Could not read Alloy's component list (status
+          {{ _cl_components.status | default('none') }}). This is NOT the same as "no components
+          are loaded" and must not be reported as such — fix the read before judging the agent.
+
+    - name: Work out which of this owner's components are live and healthy
+      # Recomputed from the last response rather than trusting the until: loop's own exit — a retry
+      # loop that exhausts its retries still reports the task green on its own.
+      ansible.builtin.set_fact:
+        _cl_mine: >-
+          {{ (_cl_components.content | default('[]') | from_json | default([], true))
+             | selectattr('localID', 'search', '\.' ~ _cl_prefix ~ '_') | list }}
+
+    - name: Assert every source is loaded and healthy
+      ansible.builtin.assert:
+        that:
+          # Two components per source: the file_match and the loki.source.file that reads it.
+          - (_cl_mine | length) >= (config_logs_sources | length) * 2
+          - _cl_mine | rejectattr('health.state', 'equalto', 'healthy') | list | length == 0
+        fail_msg: >-
+          Alloy did not load owner '{{ config_logs_owner }}' cleanly:
+          {{ _cl_mine | length }} component(s) found for
+          {{ config_logs_sources | length }} source(s), unhealthy:
+          {{ _cl_mine | rejectattr('health.state', 'equalto', 'healthy')
+             | map(attribute='localID') | list }}.
+        success_msg: >-
+          Alloy is running {{ _cl_mine | length }} healthy component(s) for owner
+          '{{ config_logs_owner }}'.

@@ -1,0 +1,11 @@
+version: 1
+urls:
+{% if apprise_notify_ha_enabled and apprise_notify_ha_token | length > 0 and apprise_notify_ha_host | length > 0 %}
+  - hassio://{{ apprise_notify_ha_host }}:{{ apprise_notify_ha_port }}/{{ apprise_notify_ha_token }}
+{% endif %}
+{% if apprise_notify_email_enabled and apprise_notify_email_password | length > 0 and apprise_notify_email_user | length > 0 %}
+  - mailto://{{ apprise_notify_email_user | regex_replace('@.*$', '') }}:{{ apprise_notify_email_password }}@gmail.com?to={{ apprise_notify_email_to }}
+{% endif %}
+{% if apprise_notify_slack_enabled and apprise_notify_slack_url | length > 0 %}
+  - {{ apprise_notify_slack_url }}
+{% endif %}

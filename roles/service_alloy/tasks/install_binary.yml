@@ -1,0 +1,165 @@
+---
+# NOTE ON `become`: this file declares none, deliberately. The caller sets `become: true` at
+# PLAY level — config.yml and systemd.yml rely on exactly that and carry no become of their own.
+# Adding it per-task here would make the binary path behave differently from the apt path for no
+# reason, and would hide a play that forgot it.
+#
+# Install Alloy from the upstream release ZIP, for hosts where a package manager is the wrong
+# answer — i.e. image-based systems (ostree/rpm-ostree) where /usr is read-only and every
+# layered package is a permanent tax on future image updates.
+#
+# WHY NOT THE RPM. Grafana does publish an RPM repo, and `rpm-ostree install alloy` would work.
+# It is rejected deliberately: each layered package must be re-resolved against every new base
+# image, a
+# conflict with a newer base BLOCKS updates entirely (surfacing weeks later as "my system stopped
+# updating"), a rebase re-resolves the whole set, and it needs a reboot. A telemetry agent is not
+# a kernel module; it does not need to be inside the image.
+#
+# /usr/local/bin is writable on ostree and PERSISTS across image updates.
+#
+# THE DOWNLOAD IS VERIFIED, not trusted: the release is fetched with its published SHA-256 and
+# `get_url` refuses a mismatch. Without that, this task would execute whatever the network
+# returned — which is a materially worse trust model than an apt repo with a signed keyring, and
+# the reason a checksum is mandatory rather than optional here.
+
+- name: Refuse a version with no recorded checksum
+  # An unknown version must FAIL here, not fall through to an unverified download. Bumping
+  # alloy_version without adding the matching SHA-256 is the easy mistake, and the failure mode
+  # without this assert is "installs whatever the network returned" — silently.
+  ansible.builtin.assert:
+    that:
+      - alloy_binary_version in alloy_binary_sha256_by_version
+    fail_msg: >-
+      No SHA-256 recorded for {{ alloy_binary_version }}. Add it to
+      alloy_binary_sha256_by_version in roles/service_alloy/vars/main.yml, from
+      https://github.com/grafana/alloy/releases/download/{{ alloy_binary_version }}/SHA256SUMS
+    success_msg: "Checksum on file for {{ alloy_binary_version }}."
+    quiet: true
+
+- name: Ensure the install directory exists
+  ansible.builtin.file:
+    path: "{{ alloy_binary_install_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Check the installed version, if any
+  # Read the version BEFORE downloading: a re-run on an up-to-date host should cost nothing and
+  # report `ok`, not re-download 159 MB and restart the service.
+  ansible.builtin.command:
+    argv: ["{{ alloy_binary_path }}", --version]
+  register: _alloy_installed
+  changed_when: false
+  failed_when: false
+
+- name: Note what is already there
+  ansible.builtin.set_fact:
+    _alloy_have_version: >-
+      {{ (_alloy_installed.stdout | default('') | regex_search('v?([0-9]+\.[0-9]+\.[0-9]+)', '\1') | first)
+         if _alloy_installed.rc == 0 else '' }}
+
+- name: Install or upgrade the binary
+  when: _alloy_have_version != (alloy_binary_version | regex_replace('^v', ''))
+  block:
+    - name: Create a staging directory
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: alloy
+      register: _alloy_tmp
+
+    - name: Fetch the release, verifying its checksum
+      # A WRONG OR MISSING CHECKSUM MUST FAIL THE PLAY. `get_url` enforces it, so a tampered or
+      # truncated download cannot reach /usr/local/bin.
+      ansible.builtin.get_url:
+        url: "{{ alloy_binary_url }}"
+        dest: "{{ _alloy_tmp.path }}/alloy.zip"
+        checksum: "sha256:{{ alloy_binary_sha256 }}"
+        mode: "0644"
+        timeout: 120
+
+    - name: Unpack it
+      ansible.builtin.unarchive:
+        src: "{{ _alloy_tmp.path }}/alloy.zip"
+        dest: "{{ _alloy_tmp.path }}"
+        remote_src: true
+
+    - name: Put the binary in place
+      # Copied rather than moved so the mode and ownership are declared, and so a partially
+      # unpacked archive cannot leave a half-written binary at the destination.
+      ansible.builtin.copy:
+        src: "{{ _alloy_tmp.path }}/{{ alloy_binary_archive_member }}"
+        dest: "{{ alloy_binary_path }}"
+        mode: "0755"
+        owner: root
+        group: root
+        remote_src: true
+      notify: Restart Alloy
+
+    - name: Remove the staging directory
+      ansible.builtin.file:
+        path: "{{ _alloy_tmp.path }}"
+        state: absent
+
+- name: Confirm the installed version is the one requested
+  # READ-BACK, not the copy's own result. An unarchive that produced an unexpected layout, or a
+  # binary that cannot execute on this host, both report `changed` from the copy and would leave
+  # the role believing it had installed something that does not run.
+  ansible.builtin.command:
+    argv: ["{{ alloy_binary_path }}", --version]
+  register: _alloy_final
+  changed_when: false
+
+- name: The installed binary must report the requested version
+  ansible.builtin.assert:
+    that:
+      - (alloy_binary_version | regex_replace('^v', '')) in _alloy_final.stdout
+    fail_msg: >-
+      {{ alloy_binary_path }} reports {{ _alloy_final.stdout | trim }},
+      which does not contain the requested {{ alloy_binary_version }}.
+    success_msg: "Alloy {{ alloy_binary_version }} installed at {{ alloy_binary_path }}."
+    quiet: true
+
+- name: Ensure the alloy user exists
+  # The apt package creates this; a binary install must do it explicitly. systemd.yml adds group
+  # membership, but it cannot add a user that does not exist.
+  ansible.builtin.user:
+    name: "{{ alloy_user }}"
+    system: true
+    shell: /usr/sbin/nologin
+    home: "{{ alloy_storage_dir }}"
+    create_home: false
+
+- name: Create the directories the package would have made
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ alloy_user }}"
+    group: "{{ alloy_user }}"
+    mode: "0755"
+  loop:
+    - "{{ alloy_default_config_dir }}"
+    - "{{ alloy_config_dir }}"
+    - "{{ alloy_storage_dir }}"
+
+- name: Create the environment file the package would have shipped
+  # config.yml writes CONFIG_FILE and CUSTOM_ARGS into this with `lineinfile`, which REFUSES a
+  # missing file ("Destination /etc/default/alloy does not exist !") rather than creating one.
+  # The apt package ships it; a binary install must provide it, or the shared config stage fails
+  # on exactly the platform this install path exists for.
+  #
+  # `force: false` so a re-run never clobbers the values config.yml just wrote into it.
+  ansible.builtin.copy:
+    dest: "{{ alloy_env_file }}"
+    content: |
+      # Managed by service_alloy. CONFIG_FILE and CUSTOM_ARGS are maintained by
+      # tasks/config.yml; this file exists so those lineinfile tasks have somewhere to write.
+      CONFIG_FILE="{{ alloy_config_dir }}"
+      CUSTOM_ARGS=""
+    mode: "0644"
+    force: false
+
+- name: Install the unit the package would have shipped
+  ansible.builtin.template:
+    src: alloy.service.j2
+    dest: /etc/systemd/system/alloy.service
+    mode: "0644"
+  notify: Restart Alloy

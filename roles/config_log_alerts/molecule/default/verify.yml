@@ -1,0 +1,125 @@
+---
+- name: Verify config_log_alerts
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    _tmp: /tmp/molecule-config-log-alerts
+
+  tasks:
+    - name: Read the converge results
+      ansible.builtin.slurp:
+        src: "{{ _tmp }}/results.json"
+      register: _r
+
+    - name: Read the rendered rule content
+      ansible.builtin.slurp:
+        src: "{{ _tmp }}/rendered.yml"
+      register: _rendered
+
+    - name: Parse
+      ansible.builtin.set_fact:
+        results: "{{ _r.content | b64decode | from_json }}"
+        raw: "{{ _rendered.content | b64decode }}"
+        parsed: "{{ _rendered.content | b64decode | from_yaml }}"
+
+    # --- the property the role's construction exists for -----------------------------------------
+    - name: Build the expected Go-template strings
+      # These MUST be built with {% raw %} and compared as VARIABLES. Writing the expected text as
+      # a literal inside `assert: that:` does not work: the `{{ ... }}` in the literal is itself
+      # rendered by Jinja before the comparison, and the task then dies with
+      # "'in <string>' requires string as left operand, not CapturedExceptionMarker" — for a
+      # WORKING role as readily as a broken one. (Verified in config_alerts' own scenario: that
+      # form fails both when the Go text is present and when it has been stripped, so it can never
+      # distinguish the two.)
+      ansible.builtin.set_fact:
+        _want_summary: "{% raw %}{{ $labels.service_name }}{% endraw %} is logging errors"
+        _want_description: "{% raw %}{{ $value }}{% endraw %} lines in 5m"
+
+    - name: Go template expressions reached the rendered content verbatim
+      # The single most important assertion here. Loki annotations use GO templating, which shares
+      # Jinja's delimiters — if the role ever regresses from copy(content=) to `template:`, the
+      # annotation is either a hard error on the '$' or silently emptied. Asserting on the RAW
+      # bytes rather than the parsed structure, because that is what the ruler reads.
+      ansible.builtin.assert:
+        that:
+          - _want_summary in raw
+          - _want_description in raw
+        fail_msg: >-
+          Go template syntax did not survive into the rule content. The role must serialise the
+          rules with to_nice_yaml and write them with copy(content=), never with `template:`.
+        success_msg: "Go template annotations survived verbatim."
+
+    - name: The content is valid YAML with the expected structure
+      ansible.builtin.assert:
+        that:
+          - parsed.groups | length == 1
+          - parsed.groups[0].name == 'molecule-render'
+          - parsed.groups[0].rules | length == 1
+          - parsed.groups[0].rules[0].alert == 'GoTemplateSurvives'
+          - parsed.groups[0].rules[0].expr == 'sum(count_over_time({platform="docker"}[5m])) > 0'
+        fail_msg: "the rendered content did not round-trip to the expected structure."
+
+    - name: The LogQL stream selector survived unmangled
+      # A selector contains both braces and double quotes, which is exactly the shape that gets
+      # mangled by an accidental extra templating pass or by YAML requoting. If `platform="docker"`
+      # does not survive byte-for-byte, the installed rule matches nothing — a silent guard.
+      ansible.builtin.assert:
+        that:
+          - '''{platform="docker"}'' in raw'
+        fail_msg: >-
+          The LogQL stream selector was altered during rendering. A mangled selector matches no
+          streams, so the rule would load and never fire.
+
+    - name: The content records its owner
+      # Ownership must be discoverable by reading the ruler's tenant directory — that is what
+      # replaces a central manifest.
+      ansible.builtin.assert:
+        that:
+          - "'ANSIBLE MANAGED — owner: molecule-render' in raw"
+        fail_msg: "the rule content does not identify its owner."
+
+    # --- the guards actually fire -----------------------------------------------------------------
+    - name: The owner-name guard rejected a path traversal
+      ansible.builtin.assert:
+        that:
+          - results.traversal_failed
+        fail_msg: >-
+          config_log_alerts_owner='../chunks' was ACCEPTED. The owner name becomes a filename
+          inside the container, so this guard must fire — '../chunks' would write into Loki's own
+          chunk store.
+
+    - name: state=present with no rules was rejected
+      ansible.builtin.assert:
+        that:
+          - results.empty_failed
+        fail_msg: >-
+          An empty rule set was accepted for state=present. That writes an empty file and silently
+          removes the owner's entire log-alert coverage while reporting success.
+
+    - name: A rule with no expression was rejected
+      ansible.builtin.assert:
+        that:
+          - results.noexpr_failed
+        fail_msg: >-
+          A rule with no `expr` was accepted. The ruler rejects the WHOLE file on one bad rule and
+          then logs it and carries on, so this owner's entire coverage would vanish with nothing
+          reporting it.
+
+    - name: Report
+      ansible.builtin.debug:
+        msg:
+          - "Go templating survived    : yes"
+          - "LogQL selector intact     : yes"
+          - "traversal guard fired     : {{ results.traversal_failed }}"
+          - "empty-ruleset guard fired : {{ results.empty_failed }}"
+          - "missing-expr guard fired  : {{ results.noexpr_failed }}"
+          - >-
+            NOT COVERED HERE (needs a live Loki + docker): the docker cp install path, the LogQL
+            validation queries, and the ruler read-back. A round-trip run against a live Loki
+            proves those.
+
+    - name: Clean up
+      ansible.builtin.file:
+        path: "{{ _tmp }}"
+        state: absent

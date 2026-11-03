@@ -1,0 +1,52 @@
+prometheus.exporter.unix "systemmetrics" {
+{% if not config.platform == "real" %}
+  udev_data_path = ""     // <— disables udev lookups in LXC or docker
+{% endif %}
+  disable_collectors = {{ config.metrics_system.disable_collectors
+                          | default(alloy_collector_defaults.disable) | to_json }}
+  // `textfile` is NOT enabled by default in the unix exporter, and without it a .prom file is
+  // written by its timer and then scraped by nobody -- metrics that exist on disk and never in
+  // Prometheus. It backs the intel_gpu_* and docker_container_health_* series (see the
+  // textfile_exporters role). The directory is created by that role; the collector tolerates it
+  // being absent on hosts that run no exporters, emitting node_textfile_scrape_error instead.
+  // Extra collectors, per host class. `systemd` is the one that matters on a hypervisor: it exports
+  // per-unit state, which is what surfaces units that fail to start after a reboot.
+  //
+  // NOTE what this does NOT give you: ZFS POOL health. The zfs collector reads ARC internals from
+  // procfs (node_zfs_arc_* — already arriving), but OpenZFS 2.x no longer exposes pool state there,
+  // so scrub status, pool health and capacity need a `zpool status` textfile collector or
+  // zfs_exporter. Enabling a collector here does not close that gap.
+  enable_collectors = {{ config.metrics_system.enable_collectors
+                         | default(alloy_collector_defaults.enable) | to_json }}
+  textfile {
+    directory = "{{ config.metrics_system.textfile_directory | default(alloy_config__default.metrics_system.textfile_directory) }}"
+  }
+  filesystem {
+    fs_types_exclude     = "^(autofs|binfmt_misc|bpf|cgroup2?|configfs|debugfs|devpts|devtmpfs|tmpfs|fusectl|hugetlbfs|iso9660|mqueue|nsfs|overlay|proc|procfs|pstore|rpc_pipefs|securityfs|selinuxfs|squashfs|sysfs|tracefs)$"
+    mount_points_exclude = "^/(dev|proc|run/credentials/.+|sys|var/lib/docker/.+)($|/)"
+    mount_timeout        = "5s"
+  }
+  netclass {
+    ignored_devices = "^(veth.*|cali.*|[a-f0-9]{15})$"
+  }
+  netdev {
+    device_exclude = "^(veth.*|cali.*|[a-f0-9]{15})$"
+  }
+}
+
+// Same instance pinning as service_alloy.alloy.j2 -- see the note there. Without it the unix
+// exporter's series follow the transient hostname too.
+discovery.relabel "systemmetrics" {
+  targets = prometheus.exporter.unix.systemmetrics.targets
+  rule {
+    target_label = "instance"
+    replacement  = {{ ('"' ~ config.hostname_override ~ '"') if config.hostname_override is defined and config.hostname_override else "constants.hostname" }}
+  }
+}
+
+prometheus.scrape "systemmetrics" {
+  scrape_interval = "{{ config.metrics_system.scrape_interval | default(alloy_config__default.metrics_system.scrape_interval) }}"
+  targets    = discovery.relabel.systemmetrics.output
+  job_name       = "systemmetrics"
+  forward_to = [prometheus.remote_write.default.receiver]
+}

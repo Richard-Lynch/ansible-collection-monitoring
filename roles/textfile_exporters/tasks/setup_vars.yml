@@ -1,0 +1,52 @@
+---
+- name: Resolve declared options over their generated defaults
+  # GENERATED from meta/argument_specs.py. One list of options, so a new option cannot be declared
+  # in the argspec and silently missed by a hand-written resolver.
+  ansible.builtin.include_tasks: _resolve_defaults.yml
+
+- name: Build the selected-exporter list
+  # Kept out of main.yml so the selection logic reads in one place rather than being repeated in
+  # every loop's `when:`. Each entry carries its script, output filename and unit description, so
+  # the install tasks are a plain loop with no per-exporter branching.
+  ansible.builtin.set_fact:
+    _txe_selected: >-
+      {{
+        ([{
+            'name': 'intel-gpu-metrics',
+            'src': 'intel-gpu-metrics.sh',
+            'out': 'intel_gpu.prom',
+            'description': 'Intel GPU telemetry for the Prometheus textfile collector',
+        }] if (txe_gpu | bool) else [])
+        +
+        ([{
+            'name': 'docker-health-metrics',
+            'src': 'docker-health-metrics.sh',
+            'out': 'docker_health.prom',
+            'description': 'Docker container health for the Prometheus textfile collector',
+        }] if (txe_docker | bool) else [])
+        +
+        ([{
+            'name': 'wan-egress-ip-metrics',
+            'src': 'wan-egress-ip-metrics.sh',
+            'out': 'wan_egress_ip.prom',
+            'description': "Public egress IP for the Prometheus textfile collector",
+            'args': txe_wan_ip_expected,
+        }] if (txe_wan_ip | bool) else [])
+        +
+        ([{
+            'name': 'wireguard-metrics',
+            'src': 'wireguard-metrics.sh',
+            'out': 'wireguard.prom',
+            'description': 'WireGuard tunnel state for the Prometheus textfile collector',
+            'args': txe_wireguard_interface,
+        }] if (txe_wireguard | bool) else [])
+        +
+        ([{
+            'name': 'ha-recorder-metrics',
+            'src': 'ha-recorder-metrics.sh',
+            'out': 'ha_recorder.prom',
+            'description': 'Home Assistant recorder staleness for the Prometheus textfile collector',
+            'args': txe_ha_recorder_base_url ~ ' ' ~ txe_ha_recorder_token_file
+                    ~ ' ' ~ txe_ha_recorder_window_seconds,
+        }] if (txe_ha_recorder | bool) else [])
+      }}

@@ -1,0 +1,57 @@
+---
+# AUTO-GENERATED argument spec — DO NOT EDIT.
+#
+# Source of truth: roles/service_prometheus/meta/argument_specs.py
+# Regenerate:      venv/bin/python tools/argspec/cli.py x generate service_prometheus
+#
+# Edits here are silently overwritten on the next generation. To change a value or its
+# documentation, change the OptionSpec in the source file above — descriptions there
+# are emitted as the comments in this file.
+argument_specs:
+  main:
+    short_description: Deploys Prometheus (retention-capped) on the shared monitoring network
+    version_added: '1.0'
+    author: Collection maintainers
+    options:
+      prometheus_image_version:
+        description:
+          - prom/prometheus image tag.
+        type: str
+        required: false
+        default: latest
+      prometheus_host_port:
+        description:
+          - Host port mapped to Prometheus 9090.
+        type: int
+        required: false
+        default: '9090'
+      prometheus_retention_time:
+        description:
+          - TSDB retention by time (e.g. 30d).
+        type: str
+        required: false
+        default: 30d
+      prometheus_retention_size:
+        description:
+          - TSDB retention by size — hard ceiling so it can't fill the disk.
+        type: str
+        required: false
+        default: 20GB
+      prometheus_network:
+        description:
+          - Shared external docker network the stack joins.
+        type: str
+        required: false
+        default: monitoring
+      prometheus_alertmanager_enabled:
+        description:
+          - "DEFAULT TRUE, deliberately. The template wraps BOTH `alerting:` and `rule_files:` in this flag, so a false/absent value re-renders prometheus.yml with alerting REMOVED: Prometheus then loads zero alert rules, and a host looks monitored while it cannot alert. A default of false would mean 'does nothing', which for a monitoring stack is the opposite of safe."
+        type: bool
+        required: false
+        default: true
+      prometheus_alertmanager_target:
+        description:
+          - Alertmanager endpoint Prometheus sends alerts to.
+        type: str
+        required: false
+        default: alertmanager:9093

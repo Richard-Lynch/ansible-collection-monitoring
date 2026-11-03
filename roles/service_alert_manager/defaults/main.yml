@@ -1,0 +1,77 @@
+---
+alertmanager_container_name: alertmanager
+alertmanager_image: "prom/alertmanager:v0.32.2" # pinned; >= 0.32 is REQUIRED for webhook `payload:` templating
+alertmanager_host_port: 9093
+# Interface the host port is published on. EMPTY = every interface (fine on a firewalled private
+# host). Set an address to keep the API off a public interface: Alertmanager has no
+# authentication, so on an internet-facing host it must bind a private/tunnel address only.
+alertmanager_bind_address: ""
+
+# Shared external docker network (reaches http://apprise-api:8000 by name).
+alertmanager_network: monitoring
+alertmanager_config_dir: "/opt/alertmanager"
+
+alertmanager_resolve_timeout: "5m"
+
+# --- notification route → Apprise ---
+# Alertmanager posts to Apprise's stateful config-id endpoint. Create the config-id in Apprise first
+# (the URL slug that holds your HA/Gmail targets), then set it here.
+alertmanager_apprise_url: "http://apprise-api:8000"
+alertmanager_apprise_config_id: "alerts" # POST target: /notify/<config-id>
+# Apprise `format` for the rendered notification. `text`, not markdown/html: the body carries
+# annotation text verbatim, and under markdown->HTML a literal `<name>` in a description is eaten
+# as an HTML tag (`{service_name="<name>"}` arrives as `{service_name=""}`).
+alertmanager_apprise_format: "text"
+# No Apprise payload REMAP: its remapper can copy only ONE source field into each of title/body — no
+# concatenation, no literals, no array indexing — so the subject would be the bare word "firing" and
+# the body would never name the affected service. Alertmanager >= 0.32 renders `payload:` itself
+# from files/config/notification.tmpl instead.
+
+# Last line of every notification body, e.g. where to start investigating. Plain text only (it is
+# placed inside a Go template, so it must not contain `{{`). Empty = no footer.
+alertmanager_notification_footer: ""
+
+# Alertmanager `inhibit_rules` (list of source_matchers/target_matchers/equal dicts), rendered
+# verbatim. Empty = no inhibition. See alertmanager.yml.j2 for what inhibition does and does not do.
+alertmanager_inhibit_rules: []
+
+# Child routes to a receiver with no integrations: matching alerts still ARRIVE at Alertmanager
+# (and show in /api/v2/alerts, which is what the firing-proof plays assert) but notify nobody. A
+# list of {matchers: [<matcher strings, ANDed>], reason: <why>}. Empty = no such route.
+alertmanager_discard_routes: []
+
+# Grouping / repeat cadence.
+alertmanager_group_wait: "30s"
+alertmanager_group_interval: "5m"
+alertmanager_repeat_interval: "4h"
+
+# --- dead-man heartbeat (EXTERNAL watchdog) -----------------------------------------------------
+# When the monitoring host, its notification target and its WAN egress share one failure domain,
+# losing that domain produces no notification at all: silence reads as health.
+#
+# The Watchdog alert fires continuously; its ABSENCE is the signal. Routed to a heartbeat monitor
+# hosted OFF the monitored site, so the death of the site is exactly what makes the pushes stop.
+#
+# This is the EXTERNAL half of a two-part watchdog. The internal half (DeadMansSwitch, routed to
+# Apprise) catches component-level failure fast while the site is alive; the external half catches
+# whole-site death, which the internal half by construction cannot report.
+alertmanager_heartbeat_enabled: false
+# MUST be off-site. An Uptime Kuma push URL on a host in another failure domain qualifies; anything
+# on the monitored site's own hosts does not — it would share the failure domain it reports on.
+# MUST be https:// when the heartbeat is enabled: the POST crosses the network boundary. Enforced by
+# an assert in tasks/main.yml, not just documented here.
+alertmanager_heartbeat_url: ""
+# Push cadence. Keep well under the heartbeat monitor's own grace period, or a single missed push
+# raises a false alarm.
+alertmanager_heartbeat_interval: "1m"
+
+# --- Cloudflare Access mTLS for the heartbeat webhook (off by default) -------------------------
+# Set this when alertmanager_heartbeat_url is a Cloudflare Access-protected hostname (a tunnel
+# fronting Uptime Kuma's UI is the intended case). See this role's README "Heartbeat transport" for
+# why mTLS rather than a Cloudflare Access service-token header pair: Alertmanager's webhook
+# http_config carries tls_config/basic_auth/authorization/oauth2, not two arbitrary headers.
+alertmanager_heartbeat_mtls_enabled: false
+# PEM client cert/key content, resolved by the caller from its secret store. Left empty by default; the role asserts both are
+# non-empty before rendering anything when alertmanager_heartbeat_mtls_enabled is true.
+alertmanager_heartbeat_mtls_cert: ""
+alertmanager_heartbeat_mtls_key: ""

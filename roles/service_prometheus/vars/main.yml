@@ -1,0 +1,11 @@
+---
+prometheus__name: prometheus
+
+# SCRAPE TARGETS ARE NOT DEFINED HERE.
+#
+# A hardcoded list in role vars/ would outrank play vars, so a target added only in a play would be
+# silently discarded on the next render, with no error anywhere.
+#
+# Targets are registered per-owner by the play that deploys each entity, via config_metrics, which
+# writes one file into the file_sd directory and reads the result back from Prometheus's own API.
+# Two owners cannot collide because they cannot address the same file.

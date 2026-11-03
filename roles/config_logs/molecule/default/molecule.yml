@@ -1,0 +1,35 @@
+# Offline scenario — renders the role's OWN template and asserts on the output.
+#
+# NO AGENT IS TOUCHED. config_logs_dir is a temp dir, config_logs_validate is false (alloy fmt is
+# not installed in CI), and nothing is restarted. The formatter check needs a host with Alloy —
+# see README.md (rc=0 on valid config, rc=1 on malformed).
+---
+dependency:
+  name: galaxy
+driver:
+  name: default
+platforms:
+  - name: localhost
+provisioner:
+  name: ansible
+  # Molecule runs from the scenario directory, so a project ansible.cfg roles_path does not
+  # resolve. Pointed at the roles directory so converge.yml can include_role the role under test.
+  env:
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/../"
+    # BOTH trees: the installed dependencies (collections.galaxy/) and the tree holding this
+    # role's own collection. Molecule does not inherit ansible.cfg, and a dev venv that bundles
+    # the collections in site-packages would hide the omission.
+    ANSIBLE_COLLECTIONS_PATH: "${MOLECULE_PROJECT_DIRECTORY}/../../collections.galaxy:${MOLECULE_PROJECT_DIRECTORY}/../../../../.."
+  inventory:
+    host_vars:
+      localhost:
+        ansible_connection: local
+  playbooks:
+    converge: converge.yml
+    verify: verify.yml
+verifier:
+  name: ansible
+scenario:
+  # No idempotence step: converge deliberately provokes the role's guards and catches them with
+  # block/rescue, so a second converge re-raises by design.
+  test_sequence: [syntax, converge, verify]

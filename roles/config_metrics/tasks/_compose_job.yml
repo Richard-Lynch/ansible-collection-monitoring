@@ -1,0 +1,16 @@
+---
+# Compose the scrape job, injecting config_metrics_job_secret in the shape config_metrics_job_auth
+# names. Separate from scrape_job.yml so molecule can exercise exactly this logic without the
+# root-owned writes and the promtool exec around it.
+#   bearer -> authorization: {type: Bearer, credentials: <secret>}   (Home Assistant)
+#   basic  -> basic_auth: {username: <username>, password: <secret>}  (Uptime Kuma: API key as password)
+- name: Compose the job with its credential
+  ansible.builtin.set_fact:
+    _cmj_job: >-
+      {{ config_metrics_job
+         if (config_metrics_job_secret | length) == 0
+         else config_metrics_job | combine(
+           {'basic_auth': {'username': config_metrics_job_username, 'password': config_metrics_job_secret}}
+           if config_metrics_job_auth == 'basic'
+           else {'authorization': {'type': 'Bearer', 'credentials': config_metrics_job_secret}}) }}
+  no_log: true

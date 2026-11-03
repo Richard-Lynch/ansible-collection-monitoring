@@ -1,0 +1,63 @@
+---
+# AUTO-GENERATED defaults resolver — DO NOT EDIT.
+#
+# Source of truth: roles/textfile_exporters/meta/argument_specs.py
+# Regenerate:      venv/bin/python tools/argspec/cli.py x generate textfile_exporters
+#
+# Edits here are silently overwritten on the next generation. To change a value or its
+# documentation, change the OptionSpec in the source file above — descriptions there
+# are emitted as the comments in this file.
+
+# Binds every declared option to its generated default, so a caller-supplied value
+# wins and an unsupplied one falls back rather than evaluating Undefined.
+#
+# Include this FIRST from every entrypoint:
+#   - ansible.builtin.include_tasks: _resolve_defaults.yml
+#
+# Role-specific setup logic belongs in tasks/setup_vars.yml, NOT here — this file is
+# overwritten on every generation.
+#
+# TWO BRANCHES, because `set_fact` persists for the whole play. A role invoked twice in
+# one play would otherwise see its OWN leftover facts on the second call, so a later
+# caller that omitted an option silently inherited the earlier caller's value instead of
+# the declared default. On a repeat call this ignores the role's own facts and rebinds
+# the defaults; an include-level `vars:` shadows the fact, so a value the caller DID
+# supply this time still wins. Roles called once per play only ever run the first branch.
+
+- name: Resolve declared options over their generated defaults
+  ansible.builtin.set_fact:
+    txe_gpu: "{{ txe_gpu | default(txe_gpu__default) if txe_gpu__default is defined else txe_gpu | default(omit) }}"
+    txe_docker: "{{ txe_docker | default(txe_docker__default) if txe_docker__default is defined else txe_docker | default(omit) }}"
+    txe_wireguard: "{{ txe_wireguard | default(txe_wireguard__default) if txe_wireguard__default is defined else txe_wireguard | default(omit) }}"
+    txe_wireguard_interface: "{{ txe_wireguard_interface | default(txe_wireguard_interface__default) if txe_wireguard_interface__default is defined else txe_wireguard_interface | default(omit) }}"
+    txe_wan_ip: "{{ txe_wan_ip | default(txe_wan_ip__default) if txe_wan_ip__default is defined else txe_wan_ip | default(omit) }}"
+    txe_wan_ip_expected: "{{ txe_wan_ip_expected | default(txe_wan_ip_expected__default) if txe_wan_ip_expected__default is defined else txe_wan_ip_expected | default(omit) }}"
+    txe_ha_recorder: "{{ txe_ha_recorder | default(txe_ha_recorder__default) if txe_ha_recorder__default is defined else txe_ha_recorder | default(omit) }}"
+    txe_ha_recorder_base_url: "{{ txe_ha_recorder_base_url | default(txe_ha_recorder_base_url__default) if txe_ha_recorder_base_url__default is defined else txe_ha_recorder_base_url | default(omit) }}"
+    txe_ha_recorder_token_file: "{{ txe_ha_recorder_token_file | default(txe_ha_recorder_token_file__default) if txe_ha_recorder_token_file__default is defined else txe_ha_recorder_token_file | default(omit) }}"
+    txe_ha_recorder_window_seconds: "{{ txe_ha_recorder_window_seconds | default(txe_ha_recorder_window_seconds__default) if txe_ha_recorder_window_seconds__default is defined else txe_ha_recorder_window_seconds | default(omit) }}"
+    txe_collector_dir: "{{ txe_collector_dir | default(txe_collector_dir__default) if txe_collector_dir__default is defined else txe_collector_dir | default(omit) }}"
+    txe_interval: "{{ txe_interval | default(txe_interval__default) if txe_interval__default is defined else txe_interval | default(omit) }}"
+    txe_apply: "{{ txe_apply | default(txe_apply__default) if txe_apply__default is defined else txe_apply | default(omit) }}"
+  when: not (_textfile_exporters__argspec_resolved | default(false))
+
+- name: Rebind the defaults on a repeat call, ignoring this role's own leftover facts
+  ansible.builtin.set_fact:
+    txe_gpu: "{{ txe_gpu__default if txe_gpu__default is defined else txe_gpu | default(omit) }}"
+    txe_docker: "{{ txe_docker__default if txe_docker__default is defined else txe_docker | default(omit) }}"
+    txe_wireguard: "{{ txe_wireguard__default if txe_wireguard__default is defined else txe_wireguard | default(omit) }}"
+    txe_wireguard_interface: "{{ txe_wireguard_interface__default if txe_wireguard_interface__default is defined else txe_wireguard_interface | default(omit) }}"
+    txe_wan_ip: "{{ txe_wan_ip__default if txe_wan_ip__default is defined else txe_wan_ip | default(omit) }}"
+    txe_wan_ip_expected: "{{ txe_wan_ip_expected__default if txe_wan_ip_expected__default is defined else txe_wan_ip_expected | default(omit) }}"
+    txe_ha_recorder: "{{ txe_ha_recorder__default if txe_ha_recorder__default is defined else txe_ha_recorder | default(omit) }}"
+    txe_ha_recorder_base_url: "{{ txe_ha_recorder_base_url__default if txe_ha_recorder_base_url__default is defined else txe_ha_recorder_base_url | default(omit) }}"
+    txe_ha_recorder_token_file: "{{ txe_ha_recorder_token_file__default if txe_ha_recorder_token_file__default is defined else txe_ha_recorder_token_file | default(omit) }}"
+    txe_ha_recorder_window_seconds: "{{ txe_ha_recorder_window_seconds__default if txe_ha_recorder_window_seconds__default is defined else txe_ha_recorder_window_seconds | default(omit) }}"
+    txe_collector_dir: "{{ txe_collector_dir__default if txe_collector_dir__default is defined else txe_collector_dir | default(omit) }}"
+    txe_interval: "{{ txe_interval__default if txe_interval__default is defined else txe_interval | default(omit) }}"
+    txe_apply: "{{ txe_apply__default if txe_apply__default is defined else txe_apply | default(omit) }}"
+  when: _textfile_exporters__argspec_resolved | default(false)
+
+- name: Record that this role has resolved its options in this play
+  ansible.builtin.set_fact:
+    _textfile_exporters__argspec_resolved: true

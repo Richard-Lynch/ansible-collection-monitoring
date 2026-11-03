@@ -1,0 +1,32 @@
+---
+- name: Converge — render apprise compose (no docker)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    apprise_container_name: apprise-api
+    apprise_image: "caronc/apprise:1.2"
+    apprise_stateful_mode: simple
+    apprise_network: monitoring
+    apprise_traefik_enabled: false
+    apprise_host_port: 8000
+    apprise_bind_address: ""
+    apprise_traefik_network: traefik
+    apprise_traefik_host: "apprise.example.test"
+    apprise_config_dir: /opt/apprise
+    apprise_puid: 1000
+    apprise_pgid: 1000
+    apprise_tz: "Etc/UTC"
+    render_dir: /tmp/molecule-apprise
+  tasks:
+    - ansible.builtin.file: { path: "{{ render_dir }}", state: directory, mode: "0755" }
+    - ansible.builtin.template:
+        src: "{{ playbook_dir }}/../../files/docker-compose.yml.j2"
+        dest: "{{ render_dir }}/docker-compose.yml"
+        mode: "0644"
+    # Bound to one address (an internet-facing host publishes only on its private/tunnel address).
+    - ansible.builtin.template:
+        src: "{{ playbook_dir }}/../../files/docker-compose.yml.j2"
+        dest: "{{ render_dir }}/docker-compose.bound.yml"
+        mode: "0644"
+      vars:
+        apprise_bind_address: "192.0.2.10"

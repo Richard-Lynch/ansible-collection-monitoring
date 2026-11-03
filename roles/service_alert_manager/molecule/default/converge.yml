@@ -1,0 +1,67 @@
+---
+- name: Converge — render alertmanager config (no docker)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    alertmanager_resolve_timeout: "5m"
+    alertmanager_apprise_url: "http://apprise-api:8000"
+    alertmanager_apprise_config_id: "alerts"
+    alertmanager_apprise_format: "text"
+    alertmanager_group_wait: "30s"
+    alertmanager_group_interval: "5m"
+    alertmanager_repeat_interval: "4h"
+    alertmanager_heartbeat_enabled: true
+    alertmanager_heartbeat_url: "https://uptime.example.com/api/push/testtoken"
+    alertmanager_heartbeat_interval: "1m"
+    alertmanager_heartbeat_mtls_enabled: true
+    alertmanager_heartbeat_mtls_cert_file: /etc/alertmanager/tls/heartbeat-client.crt
+    alertmanager_heartbeat_mtls_key_file: /etc/alertmanager/tls/heartbeat-client.key
+    alertmanager_container_name: alertmanager
+    alertmanager_image: "prom/alertmanager:v0.32.2"
+    alertmanager_host_port: 9093
+    alertmanager_bind_address: ""
+    alertmanager_network: monitoring
+    alertmanager_config_dir: /opt/alertmanager
+    alertmanager_inhibit_rules: []
+    alertmanager_discard_routes: []
+    alertmanager_notification_footer: "To investigate: see the runbook."
+    render_dir: /tmp/molecule-am
+  tasks:
+    - ansible.builtin.file: { path: "{{ render_dir }}", state: directory, mode: "0755" }
+    - ansible.builtin.template:
+        src: "{{ playbook_dir }}/../../files/config/alertmanager.yml.j2"
+        dest: "{{ render_dir }}/alertmanager.yml"
+        mode: "0644"
+    - ansible.builtin.template:
+        src: "{{ playbook_dir }}/../../files/docker-compose.yml.j2"
+        dest: "{{ render_dir }}/docker-compose.yml"
+        mode: "0644"
+    - ansible.builtin.template:
+        src: "{{ playbook_dir }}/../../files/config/footer.tmpl.j2"
+        dest: "{{ render_dir }}/footer.tmpl"
+        mode: "0644"
+    # With inhibit rules (an internet-facing host's shape).
+    - ansible.builtin.template:
+        src: "{{ playbook_dir }}/../../files/config/alertmanager.yml.j2"
+        dest: "{{ render_dir }}/alertmanager.inhibit.yml"
+        mode: "0644"
+      vars:
+        alertmanager_inhibit_rules:
+          - source_matchers: ['alertname = "UptimeKumaMonitorDown"', 'service_name =~ "a|b"']
+            target_matchers: ['alertname = "UptimeKumaMonitorDown"', 'service_name !~ "a|b"']
+            equal: [site]
+    # With a discard route (firing proofs arrive, notify nobody).
+    - ansible.builtin.template:
+        src: "{{ playbook_dir }}/../../files/config/alertmanager.yml.j2"
+        dest: "{{ render_dir }}/alertmanager.discard.yml"
+        mode: "0644"
+      vars:
+        alertmanager_discard_routes:
+          - matchers: ['alertname =~ ".+FiringProof|.+CanFire"']
+            reason: firing proofs
+    - ansible.builtin.template:
+        src: "{{ playbook_dir }}/../../files/docker-compose.yml.j2"
+        dest: "{{ render_dir }}/docker-compose.bound.yml"
+        mode: "0644"
+      vars:
+        alertmanager_bind_address: "192.0.2.10"

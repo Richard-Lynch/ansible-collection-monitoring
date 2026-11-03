@@ -1,0 +1,52 @@
+---
+- name: Verify homepage compose, widget guards and config validation
+  hosts: localhost
+  gather_facts: false
+  vars: { render_dir: /tmp/molecule-homepage }
+  tasks:
+    - ansible.builtin.slurp: { src: "{{ item }}" }
+      loop:
+        - "{{ render_dir }}/docker-compose.yml"
+        - "{{ render_dir }}/docker-compose.noallowed.yml"
+        - "{{ render_dir }}/services.yaml"
+        - "{{ render_dir }}/results.json"
+      register: _f
+    - ansible.builtin.set_fact:
+        compose: "{{ _f.results[0].content | b64decode }}"
+        compose_noallowed: "{{ _f.results[1].content | b64decode }}"
+        services: "{{ _f.results[2].content | b64decode }}"
+        r: "{{ _f.results[3].content | b64decode | from_json }}"
+
+    - name: Pinned image (not :latest), shared network, host port, no docker.sock / /data mount
+      ansible.builtin.assert:
+        that:
+          - "'ghcr.io/gethomepage/homepage:v1.4.3' in compose"
+          - "':latest' not in compose"
+          - "'monitoring:' in compose"
+          - "'3010:3000' in compose"
+          - "'- /var/run/docker.sock' not in compose"
+          - "'- /data:' not in compose"
+          - "'external: true' in compose"
+          - "'HOMEPAGE_ALLOWED_HOSTS: \"homepage.example.test,monitoring.example.test\"' in compose"
+          - "'HOMEPAGE_ALLOWED_HOSTS' not in compose_noallowed"
+        fail_msg: "homepage compose wrong (image / network / port / mounts / allowed hosts)."
+
+    - name: A supplied widget key renders; an EMPTY one omits the widget entirely
+      ansible.builtin.assert:
+        that:
+          - "'FIXTURE' in services"
+          - "'type: sonarr' in services"
+          - "'type: radarr' not in services"
+        fail_msg: "the widget-key if-guard is broken (a set key did not render, or an empty one did)."
+
+    - name: The validation gate passes good configs and refuses each broken one
+      ansible.builtin.assert:
+        that:
+          - r.defaults == 'passed'
+          - r.good == 'passed'
+          - r.mismatch is search('do not match settings.yaml layout keys')
+          - r.forbidden is search('homepage_forbidden_href_patterns')
+          - r.bookmark is search('homepage_bookmarks_forbidden_href_pattern')
+        fail_msg: "config validation verdicts wrong: {{ r }}"
+
+    - ansible.builtin.file: { path: "{{ render_dir }}", state: absent }

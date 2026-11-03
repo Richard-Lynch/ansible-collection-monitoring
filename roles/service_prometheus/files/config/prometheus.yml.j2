@@ -1,0 +1,34 @@
+global:
+  scrape_interval: 15s
+
+{% if prometheus_alertmanager_enabled | default(false) %}
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["{{ prometheus_alertmanager_target | default('alertmanager:9093') }}"]
+
+rule_files:
+  - /etc/prometheus/rules/*.yml
+{% endif %}
+
+# Per-owner scrape JOBS, for targets a file_sd entry cannot express — it carries no per-target
+# auth, interval or metric_relabel_configs. Written by config_metrics (entrypoint: scrape_job)
+# from the play that owns the entity — e.g. a target that needs a bearer token, its own interval,
+# and metric drops.
+#
+# Read at CONFIG LOAD, unlike file_sd which is polled — a new job here needs a reload.
+# Requires Prometheus >= 2.43.
+scrape_config_files:
+  - /etc/prometheus/scrape_jobs/*.yml
+
+scrape_configs:
+  # Prometheus scraping ITSELF stays here: it is not a property of any entity this server monitors,
+  # it is the server's own liveness, and it must survive even a completely empty file_sd.
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:{{ prometheus_host_port }}"]
+  - job_name: 'dynamic-services'
+    file_sd_configs:
+      - files:
+          - /etc/prometheus/file_sd/*.yml
+        refresh_interval: 30s

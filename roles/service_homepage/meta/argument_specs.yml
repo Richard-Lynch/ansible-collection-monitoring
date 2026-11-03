@@ -1,0 +1,149 @@
+---
+# AUTO-GENERATED argument spec — DO NOT EDIT.
+#
+# Source of truth: roles/service_homepage/meta/argument_specs.py
+# Regenerate:      venv/bin/python tools/argspec/cli.py x generate service_homepage
+#
+# Edits here are silently overwritten on the next generation. To change a value or its
+# documentation, change the OptionSpec in the source file above — descriptions there
+# are emitted as the comments in this file.
+argument_specs:
+  main:
+    short_description: Deploy gethomepage/homepage as a validated links-and-widgets dashboard
+    version_added: '1.0'
+    author: Collection maintainers
+    options:
+      homepage_container_name:
+        description:
+          - Container name.
+        type: str
+        required: false
+      homepage_image:
+        description:
+          - gethomepage/homepage image tag. Pinned — never :latest.
+        type: str
+        required: false
+      homepage_config_dir:
+        description:
+          - Host config dir.
+        type: str
+        required: false
+      homepage_network:
+        description:
+          - Shared external docker network the container joins.
+        type: str
+        required: false
+      homepage_host_port:
+        description:
+          - Host port -> container's 3000, for a reverse proxy to front.
+        type: int
+        required: false
+      homepage_puid:
+        description:
+          - Container PUID.
+        type: int
+        required: false
+      homepage_pgid:
+        description:
+          - Container PGID.
+        type: int
+        required: false
+      homepage_umask:
+        description:
+          - Container UMASK.
+        type: str
+        required: false
+      homepage_tz:
+        description:
+          - Container timezone.
+        type: str
+        required: false
+      homepage_allowed_hosts:
+        description:
+          - Comma-separated HOMEPAGE_ALLOWED_HOSTS value — homepage rejects requests whose
+          - Host header isn't in this list. Set every name the page is reached by. Empty
+          - leaves homepage's own default (localhost only).
+        type: str
+        required: false
+      homepage_title:
+        description:
+          - Dashboard title (settings.yaml).
+        type: str
+        required: false
+      homepage_description:
+        description:
+          - Dashboard description (settings.yaml).
+        type: str
+        required: false
+      homepage_instance_name:
+        description:
+          - Dashboard instanceName (settings.yaml, aids multi-instance auto-discovery).
+        type: str
+        required: false
+      homepage_sonarr_api_key:
+        description:
+          - Sonarr API key for the Sonarr service-card widget, from a secret store.
+          - Empty string omits the widget's key field entirely (renders a plain link card
+          - instead of a broken widget) — see the conditional guards in services.yaml.j2.
+        type: str
+        required: false
+        no_log: true
+      homepage_radarr_api_key:
+        description:
+          - Radarr API key, same empty-string-omits-the-widget handling as homepage_sonarr_api_key.
+        type: str
+        required: false
+        no_log: true
+      homepage_prowlarr_api_key:
+        description:
+          - Prowlarr API key, same empty-string-omits-the-widget handling as homepage_sonarr_api_key.
+        type: str
+        required: false
+        no_log: true
+      homepage_sabnzbd_api_key:
+        description:
+          - SABnzbd API key, same empty-string-omits-the-widget handling as homepage_sonarr_api_key.
+        type: str
+        required: false
+        no_log: true
+      homepage_proxmox_token_id:
+        description:
+          - Proxmox API token ID, for a caller's services.yaml.j2 that renders Proxmox
+          - node widgets. The role's own default page does not read it.
+        type: str
+        required: false
+      homepage_proxmox_token_secret:
+        description:
+          - Matching Proxmox API token secret. Same not-yet-wired status as homepage_proxmox_token_id.
+        type: str
+        required: false
+        no_log: true
+      homepage_homeassistant_token:
+        description:
+          - Home Assistant long-lived access token for its widget, from a secret store.
+          - Empty string omits the widget's key field, same handling as the keys above.
+        type: str
+        required: false
+        no_log: true
+      homepage_config_src:
+        description:
+          - Controller directory of config templates (services, settings, bookmarks,
+          - widgets, docker; .yaml or .yaml.j2) that REPLACES the role's default set.
+          - "Empty deploys the role's default: an empty page. The cards are installation"
+          - data, so they live with the caller.
+        type: str
+        required: false
+      homepage_forbidden_href_patterns:
+        description:
+          - Regexes no service card href may match — hosts known to be dead or retired,
+          - which a later edit could plausibly re-add. Checked before every deploy.
+        type: list
+        required: false
+        elements: str
+      homepage_bookmarks_forbidden_href_pattern:
+        description:
+          - One regex no bookmark href may match — typically your own domain, since a
+          - link there belongs in services.yaml as a card with its siteMonitor. Empty
+          - checks nothing.
+        type: str
+        required: false

@@ -1,0 +1,29 @@
+# {{ ansible_managed }}
+#
+# The unit the apt/rpm PACKAGE would normally ship. A binary install has to provide it, because
+# nothing else will — and on an image-based OS /etc/systemd/system is the writable, persistent
+# place for it.
+#
+# Modelled on Grafana's packaged unit so the drop-in written by systemd.yml
+# (/etc/systemd/system/alloy.service.d/override.conf) applies identically on every platform:
+# a host installed from a binary and one installed from a package must behave the same, or the
+# role's later stages become platform-specific too.
+[Unit]
+Description=Grafana Alloy
+Documentation=https://grafana.com/docs/alloy/
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Restart=always
+User={{ alloy_user }}
+Environment=HOSTNAME=%H
+EnvironmentFile=-{{ alloy_env_file }}
+WorkingDirectory={{ alloy_storage_dir }}
+ExecStart={{ alloy_binary_path }} run $CUSTOM_ARGS --storage.path={{ alloy_storage_dir }} $CONFIG_FILE
+ExecReload=/usr/bin/env kill -HUP $MAINPID
+TimeoutStopSec=20s
+SendSIGKILL=no
+
+[Install]
+WantedBy=multi-user.target

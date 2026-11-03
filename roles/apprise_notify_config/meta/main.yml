@@ -1,0 +1,12 @@
+---
+galaxy_info:
+  role_name: apprise_notify_config
+  namespace: richard_lynch
+  author: Richard Lynch
+  description: >-
+    Push notification targets (Home Assistant, email, Slack) into an Apprise stateful config-id that
+    Alertmanager posts to. Targets without credentials are skipped.
+  license: GPL-3.0-or-later
+  min_ansible_version: "2.19"
+  galaxy_tags: [apprise, notifications, alerting, monitoring]
+dependencies: []

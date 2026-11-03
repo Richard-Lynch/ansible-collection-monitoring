@@ -1,0 +1,18 @@
+---
+- name: Restart Alloy
+  ansible.builtin.systemd_service:
+    service: alloy
+    state: restarted
+
+# KEPT, but nothing in this role notifies it any more -- see the note in tasks/config.yml. Alloy's
+# SIGHUP does not re-apply external_labels on the write components, so a reload is not sufficient
+# for a config change and makes a deploy a silent no-op. Retained only for a caller
+# that genuinely wants a graph re-evaluation without dropping the process.
+- name: Reload Alloy
+  ansible.builtin.systemd_service:
+    service: alloy
+    state: reloaded
+
+- name: Reload Systemd
+  ansible.builtin.systemd:
+    daemon_reload: true

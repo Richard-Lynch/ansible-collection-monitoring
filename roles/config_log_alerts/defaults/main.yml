@@ -1,0 +1,99 @@
+---
+# AUTO-GENERATED defaults file — DO NOT EDIT.
+#
+# Source of truth: roles/config_log_alerts/meta/argument_specs.py
+# Regenerate:      venv/bin/python tools/argspec/cli.py x generate config_log_alerts
+#
+# Edits here are silently overwritten on the next generation. To change a value or its
+# documentation, change the OptionSpec in the source file above — descriptions there
+# are emitted as the comments in this file.
+# Entrypoint:      main
+
+# Loki ruler rule groups, exactly as Loki models them: a list of
+# {name, interval?, rules[]} where each rule is {alert, expr, for?,
+# labels?, annotations?}. `expr` is LogQL, not PromQL — it must be a
+# metric-producing query (count_over_time / rate / bytes_over_time with an
+# aggregation), because a log-selector query returns streams rather than a
+# value and the ruler cannot compare it to a threshold.
+# Passed through structurally rather than reshaped, so the upstream
+# documentation applies unchanged and no translation layer can silently
+# drop a field it does not know about.
+config_log_alerts_groups__default: []
+
+# 'present' installs this owner's rules; 'absent' removes its file.
+# Cleanup is the OWNER's job, matching config_alerts: a
+# play that retires the thing it deploys removes its alerts in the same
+# pass. The role never deletes a file it was not asked about, so one owner
+# can never remove another's rules.
+# With 'absent', config_log_alerts_groups is not required.
+config_log_alerts_state__default: present
+
+# Loki container name, for the docker cp and the rule-directory write.
+config_log_alerts_container__default: loki
+
+# Tenant whose rule directory receives the file. Must match
+# loki_ruler_tenant in service_loki. 'fake' is the tenant id Loki
+# hardcodes under auth_enabled: false (single-tenant mode) — not a
+# placeholder. A mismatch here writes the file to a directory the ruler
+# does not read, which presents as 'the rules were installed but nothing
+# loaded them'.
+config_log_alerts_tenant__default: fake
+
+# The ruler's rule_path INSIDE the container. Must match service_loki's
+# loki__rule_path. It is on the mounted docker volume, so rules written
+# here survive a container recreate.
+config_log_alerts_rule_path__default: /loki/rules
+
+# Loki's HTTP endpoint, for the read-back that proves the ruler loaded
+# these rules. Loopback by default because Loki publishes its port on the
+# monitoring host and this role runs there.
+config_log_alerts_url__default: http://127.0.0.1:3100
+
+# With state=absent, also RESTART Loki so the removed group leaves the
+# running ruler. Deleting the rule file is not sufficient: the ruler keeps
+# evaluating an in-memory group after its file disappears (lastEvaluation
+# advancing, no copy of the file anywhere on disk), so the rules KEEP FIRING.
+# The documented fix — DELETE /loki/api/v1/rules/<namespace>/<group> —
+# does NOT work with local rule storage: it answers HTTP 500 'DeleteRuleGroup
+# unsupported in rule local store', because the write half of the ruler API
+# is not implemented for storage.type: local.
+# A restart re-reads the tenant directory from scratch and is the only
+# mechanism left.
+# DEFAULTS OFF because the cost is real and fleet-wide: restarting Loki
+# briefly interrupts log INGEST for every host, not just alerting. So the
+# caller decides whether a retired owner's stale alerts are worth that.
+# With it off the role says plainly that the group is still live rather
+# than reporting a clean removal — a half-removal reported as success is
+# how an unexplainable alert ends up firing for weeks.
+config_log_alerts_restart_on_remove__default: false
+
+# Loki's compose project directory, used ONLY by the state=absent restart
+# (see config_log_alerts_restart_on_remove). The restart goes through
+# compose rather than `docker_container`, because a docker_container
+# restart RECREATES the container outside compose's knowledge and detaches
+# it from the project, which can leave the ruler answering HTTP 400 for a
+# missing tenant directory until service_loki is re-converged.
+# Matches service_loki's loki__config_dir (/opt/<name>).
+config_log_alerts_compose_dir__default: /opt/loki
+
+# Verify, before installing, that each rule's LogQL parses AND that the
+# query is metric-producing. A rule file the ruler rejects takes this
+# owner's whole file with it, and the ruler logs that and carries on —
+# nothing else would report it.
+# This is the closest equivalent to promtool: Loki ships no rule linter,
+# so the check runs each expr through Loki's own query API, which is the
+# authoritative parser rather than a second implementation of it.
+config_log_alerts_validate__default: true
+
+# Additionally require that each rule's query is CAPABLE of returning data
+# — i.e. that its stream selector matches at least one live stream.
+# A LogQL rule whose selector matches nothing installs clean, loads, and
+# is structurally incapable of ever firing: a silent guard. That is easy
+# to do by accident when Loki carries TWO label schemes that share no host
+# key — e.g. {hostname=...} for journal streams and
+# {instance=...,service_name=...,platform="docker"} for containers. A
+# {hostname="X"} selector returns zero against a container, which reads
+# exactly like 'this service ships no logs'.
+# Turn this OFF only for a rule deliberately written against a stream that
+# does not exist yet, and say why at the call site.
+config_log_alerts_verify_matches__default: true

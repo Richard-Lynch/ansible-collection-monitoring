@@ -1,0 +1,4 @@
+---
+# No handlers needed — tasks/main.yml restarts the compose stack directly (via
+# `deployment_config_changed`), matching service_apprise's pattern rather than a notify/handler
+# indirection that would add nothing here.

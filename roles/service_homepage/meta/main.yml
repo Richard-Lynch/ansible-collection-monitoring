@@ -1,0 +1,15 @@
+---
+galaxy_info:
+  role_name: service_homepage
+  namespace: richard_lynch
+  author: Richard Lynch
+  description: >-
+    Deploy gethomepage/homepage — a links-and-widgets overview dashboard — as a Docker Compose
+    service, with the dashboard config validated before every deploy.
+  license: GPL-3.0-or-later
+  min_ansible_version: "2.19"
+  galaxy_tags:
+    - homepage
+    - dashboard
+    - monitoring
+dependencies: []

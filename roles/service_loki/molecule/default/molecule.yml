@@ -1,0 +1,25 @@
+# Offline: render compose + loki config from the ROLE'S OWN variable derivation, then assert
+# image / tsdb / retention / compactor / shared-network AND the ruler's invariants.
+#
+# No docker, no containers, no volumes — converge.yml includes only the role's `setup_vars`
+# entrypoint and renders its two templates to a temp directory.
+---
+dependency: { name: galaxy }
+driver: { name: default }
+platforms: [{ name: localhost }]
+provisioner:
+  name: ansible
+  # ANSIBLE_ROLES_PATH is REQUIRED: without it `include_role: name=service_loki` cannot resolve,
+  # and the only way to get values in would be to restate them — a second source of truth.
+  #
+  # Molecule runs from the scenario directory, so a project ansible.cfg roles_path does not
+  # apply; it is pointed at the roles directory explicitly.
+  env:
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/../"
+    # BOTH collection trees: the installed dependencies (collections.galaxy/) and the tree
+    # holding this role's own collection. Molecule does not inherit ansible.cfg, and a dev venv
+    # that bundles the collections in site-packages would hide the omission.
+    ANSIBLE_COLLECTIONS_PATH: "${MOLECULE_PROJECT_DIRECTORY}/../../collections.galaxy:${MOLECULE_PROJECT_DIRECTORY}/../../../../.."
+  inventory: { host_vars: { localhost: { ansible_connection: local } } }
+  playbooks: { converge: converge.yml, verify: verify.yml }
+verifier: { name: ansible }

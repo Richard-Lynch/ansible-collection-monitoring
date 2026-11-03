@@ -1,0 +1,233 @@
+# Exercise the role's REAL registration path and its guards, with no Prometheus.
+#
+# NOTHING IS REGISTERED ANYWHERE REAL. config_metrics_dir is a temp dir and config_metrics_verify
+# is false (the read-back needs the API), so nothing real is touched.
+#
+# What is under test is the property the role exists for: one file per owner, so two owners cannot
+# overwrite each other the way the two hardcoded target lists did.
+---
+- name: Converge
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    _tmp: /tmp/molecule-config-metrics
+
+  tasks:
+    - name: Make a render dir
+      ansible.builtin.file:
+        path: "{{ _tmp }}"
+        state: directory
+        mode: "0755"
+
+    - name: Load the role's generated defaults
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/../../defaults/main.yml"
+
+    # --- 1. register a first owner ----------------------------------------------------------------
+    - name: Register targets for a first owner
+      # include_role, not a hand-rolled copy of the role's logic: a scenario that re-derives the
+      # role's own expression over a stub list asserts a copy against itself and stays green while
+      # the role regresses.
+      ansible.builtin.include_role:
+        name: config_metrics
+      vars:
+        config_metrics_owner: molecule-owner-a
+        config_metrics_dir: "{{ _tmp }}/file_sd"
+        config_metrics_verify: false
+        config_metrics_targets:
+          - targets: ["192.0.2.6:9707"]
+            labels: {role: service-exporter, component: sonarr, service_host: arr}
+          - targets: ["192.0.2.6:9708"]
+            labels: {role: service-exporter, component: radarr, service_host: arr}
+
+    # --- 2. a SECOND owner must not disturb the first ---------------------------------------------
+    - name: Register targets for a second owner
+      ansible.builtin.include_role:
+        name: config_metrics
+      vars:
+        config_metrics_owner: molecule-owner-b
+        config_metrics_dir: "{{ _tmp }}/file_sd"
+        config_metrics_verify: false
+        config_metrics_targets:
+          - targets: ["192.0.2.7:9100"]
+            labels: {role: proxmox-node, node: pve-node-1, hostname: pve-node-1}
+
+    # --- 3. removal by the owner ------------------------------------------------------------------
+    - name: Register a third owner
+      ansible.builtin.include_role:
+        name: config_metrics
+      vars:
+        config_metrics_owner: molecule-owner-c
+        config_metrics_dir: "{{ _tmp }}/file_sd"
+        config_metrics_verify: false
+        config_metrics_targets:
+          - targets: ["192.0.2.112:9108"]
+            labels: {role: service-exporter, component: nas}
+
+    - name: Confirm owner C exists before removal
+      # Without this the removal assertion in verify.yml would pass just as happily against a file
+      # that was never created — absence proves nothing on its own.
+      ansible.builtin.stat:
+        path: "{{ _tmp }}/file_sd/molecule-owner-c.yml"
+      register: _c_before
+
+    - name: Remove owner C
+      ansible.builtin.include_role:
+        name: config_metrics
+      vars:
+        config_metrics_owner: molecule-owner-c
+        config_metrics_dir: "{{ _tmp }}/file_sd"
+        config_metrics_state: absent
+        config_metrics_verify: false
+
+    # --- 4. guards MUST fire ----------------------------------------------------------------------
+    # `ignore_errors` on an include_role does NOT catch a failure raised by a task INSIDE the
+    # included role — the include itself succeeded. block/rescue is what actually catches it.
+    - name: A path-traversal owner name is rejected
+      block:
+        - name: Attempt to register with a traversing owner name
+          ansible.builtin.include_role:
+            name: config_metrics
+          vars:
+            config_metrics_owner: "../escaped"
+            config_metrics_dir: "{{ _tmp }}/file_sd"
+            config_metrics_verify: false
+            config_metrics_targets:
+              - targets: ["127.0.0.1:1"]
+        - name: The traversal guard did NOT fire
+          ansible.builtin.set_fact:
+            _traversal_failed: false
+      rescue:
+        - name: The traversal guard fired, as required
+          ansible.builtin.set_fact:
+            _traversal_failed: true
+
+    - name: An empty target set with state=present is rejected
+      block:
+        - name: Attempt to register an empty target set
+          ansible.builtin.include_role:
+            name: config_metrics
+          vars:
+            config_metrics_owner: molecule-owner-empty
+            config_metrics_dir: "{{ _tmp }}/file_sd"
+            config_metrics_verify: false
+            config_metrics_targets: []
+        - name: The empty guard did NOT fire
+          ansible.builtin.set_fact:
+            _empty_failed: false
+      rescue:
+        - name: The empty guard fired, as required
+          ansible.builtin.set_fact:
+            _empty_failed: true
+
+    - name: An entry with no `targets` key is rejected
+      # Valid YAML and valid file_sd that scrapes NOTHING. The symptom is a missing exporter, which
+      # looks identical to one that is merely down — so the role must refuse it at write time.
+      block:
+        - name: Attempt to register a labels-only entry
+          ansible.builtin.include_role:
+            name: config_metrics
+          vars:
+            config_metrics_owner: molecule-owner-notargets
+            config_metrics_dir: "{{ _tmp }}/file_sd"
+            config_metrics_verify: false
+            config_metrics_targets:
+              - labels: {role: service-exporter, component: ghost}
+        - name: The no-targets guard did NOT fire
+          ansible.builtin.set_fact:
+            _notargets_failed: false
+      rescue:
+        - name: The no-targets guard fired, as required
+          ansible.builtin.set_fact:
+            _notargets_failed: true
+
+    - name: A generated argspec guard rejects verify_retries below its declared minimum
+      # Proves the GENERATED _argspec_guards.yml is actually included and enforcing. Ansible's own
+      # argspec validator has no numeric-range checking, so without that file the min_value
+      # declaration in meta/argument_specs.py would be decorative.
+      block:
+        - name: Attempt to register with verify_retries = 0
+          ansible.builtin.include_role:
+            name: config_metrics
+          vars:
+            config_metrics_owner: molecule-owner-retries
+            config_metrics_dir: "{{ _tmp }}/file_sd"
+            config_metrics_verify: false
+            config_metrics_verify_retries: 0
+            config_metrics_targets:
+              - targets: ["127.0.0.1:1"]
+        - name: The range guard did NOT fire
+          ansible.builtin.set_fact:
+            _retries_failed: false
+      rescue:
+        - name: The range guard fired, as required
+          ansible.builtin.set_fact:
+            _retries_failed: true
+
+    # --- scrape-job credential composition ---------------------------------------------------------
+    # The REAL _compose_job.yml, in each auth shape. Asserted here rather than in verify.yml because
+    # the composed job is a fact, and the secret must never be written to the results file.
+    - name: Compose a BASIC-auth job (Uptime Kuma shape)
+      ansible.builtin.include_role:
+        name: config_metrics
+        tasks_from: _compose_job.yml
+      vars:
+        config_metrics_job: {job_name: kuma, static_configs: [{targets: ["kuma:3001"]}]}
+        config_metrics_job_secret: molecule-fake-api-key
+        config_metrics_job_auth: basic
+
+    - name: The secret is in basic_auth.password, and there is no bearer block
+      ansible.builtin.assert:
+        that:
+          - _cmj_job.basic_auth.password == 'molecule-fake-api-key'
+          - _cmj_job.basic_auth.username == ''
+          - "'authorization' not in _cmj_job"
+          - _cmj_job.job_name == 'kuma'
+        quiet: true
+
+    - name: Compose a BEARER job (Home Assistant shape — the default)
+      ansible.builtin.include_role:
+        name: config_metrics
+        tasks_from: _compose_job.yml
+      vars:
+        config_metrics_job: {job_name: ha, static_configs: [{targets: ["ha:8123"]}]}
+        config_metrics_job_secret: molecule-fake-token
+
+    - name: The secret is in authorization.credentials, and there is no basic_auth block
+      ansible.builtin.assert:
+        that:
+          - _cmj_job.authorization.type == 'Bearer'
+          - _cmj_job.authorization.credentials == 'molecule-fake-token'
+          - "'basic_auth' not in _cmj_job"
+        quiet: true
+
+    - name: Compose a job with NO secret
+      ansible.builtin.include_role:
+        name: config_metrics
+        tasks_from: _compose_job.yml
+      vars:
+        config_metrics_job: {job_name: open, static_configs: [{targets: ["x:1"]}]}
+        config_metrics_job_secret: ""
+        config_metrics_job_auth: basic
+
+    - name: No secret means no auth block of either kind
+      ansible.builtin.assert:
+        that:
+          - "'basic_auth' not in _cmj_job"
+          - "'authorization' not in _cmj_job"
+        quiet: true
+
+    - name: Hand the results to verify.yml
+      # set_fact does not cross molecule's converge/verify playbook boundary; a file does.
+      ansible.builtin.copy:
+        dest: "{{ _tmp }}/results.json"
+        mode: "0644"
+        content: |
+          {{ {
+               'c_existed_before_removal': _c_before.stat.exists,
+               'traversal_failed': _traversal_failed,
+               'empty_failed': _empty_failed,
+               'notargets_failed': _notargets_failed,
+               'retries_failed': _retries_failed,
+             } | to_nice_json }}

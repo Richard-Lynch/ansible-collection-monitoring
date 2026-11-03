@@ -1,0 +1,53 @@
+---
+alloy_service_name: alloy
+alloy_default_config_dir: "/etc/alloy/"
+alloy_default_config_file: "/etc/alloy/config.alloy"
+alloy_storage_dir: "/var/lib/alloy"
+alloy_env_file: /etc/default/alloy
+alloy_config_dir: "/etc/alloy/config.alloy.d/"
+
+# Binary-install settings, for image-based hosts where a package manager is the wrong answer.
+#
+# HERE RATHER THAN defaults/main.yml for the same reason as the collectors below: that file is
+# generated from meta/argument_specs.py and the generator drops what it does not know about.
+#
+# THE VERSION DERIVES FROM THE FLEET PIN, and must. alloy_version (set once in inventory) is
+# pinned precisely so hosts built at different times do not end up on different versions with
+# nothing reconciling them. Giving the binary path its own default version would
+# recreate that drift along a NEW axis — by install method rather than by build date — which is
+# strictly worse because nothing would even hint the two were meant to match.
+#
+# The apt pin carries a Debian revision (`1.19.2-1`); the GitHub tag does not (`v1.19.2`), so the
+# revision is stripped and a `v` prepended.
+alloy_binary_version: "v{{ (alloy_version | default('1.19.2-1')) | regex_replace('-[0-9]+$', '') }}"
+
+# THE CHECKSUM IS NOT OPTIONAL, and is per-version: without it the role would execute whatever
+# the network returned, which is a materially worse trust model than an apt repo with a signed
+# keyring. `get_url` refuses a mismatch, so a tampered or truncated download cannot reach
+# /usr/local/bin.
+#
+# Keyed by version so changing alloy_version alone cannot silently pair a new release with an old
+# checksum — an unknown version FAILS the lookup rather than skipping verification.
+# To add one:
+#   curl -sL https://github.com/grafana/alloy/releases/download/<tag>/SHA256SUMS \
+#     | grep alloy-linux-amd64.zip
+alloy_binary_sha256_by_version:
+  "v1.19.2": "3694ea4e1044b367e1c21ffe28117f209c5989fa5e604d000321809f871ab701"
+  "v1.20.0": "5b3c5c71e682e17562d224b1841c3126dda71dbd4d049b3123f300de46215e65"
+alloy_binary_sha256: "{{ alloy_binary_sha256_by_version[alloy_binary_version] }}"
+
+alloy_binary_install_dir: /usr/local/bin
+alloy_binary_path: "{{ alloy_binary_install_dir }}/alloy"
+alloy_binary_url: >-
+  https://github.com/grafana/alloy/releases/download/{{ alloy_binary_version }}/alloy-linux-amd64.zip
+alloy_binary_archive_member: alloy-linux-amd64
+alloy_user: alloy
+
+# Collector defaults for the unix exporter.
+#
+# HERE, NOT IN defaults/main.yml: that file is GENERATED from meta/argument_specs.py, and the
+# generator does not emit list-typed options — a hand-added list there is deleted by the next
+# `argspec generate`. vars/ is not generated, so these survive.
+alloy_collector_defaults:
+  enable: ["meminfo", "textfile"]
+  disable: ["ipvs", "btrfs", "infiniband", "xfs"]

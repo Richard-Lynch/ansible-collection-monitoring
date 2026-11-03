@@ -1,0 +1,26 @@
+services:
+  {{ homepage_container_name }}:
+    image: {{ homepage_image }}
+    container_name: {{ homepage_container_name }}
+    restart: unless-stopped
+    environment:
+      PUID: "{{ homepage_puid }}"
+      PGID: "{{ homepage_pgid }}"
+      UMASK: "{{ homepage_umask }}"
+      TZ: "{{ homepage_tz }}"
+{% if homepage_allowed_hosts | length > 0 %}
+      HOMEPAGE_ALLOWED_HOSTS: "{{ homepage_allowed_hosts }}"
+{% endif %}
+    volumes:
+      - {{ homepage_config_dir }}/config:/app/config:rw
+      # Deliberately NO /var/run/docker.sock and NO /data mount — see README "Why no docker.sock".
+      # This instance is a links-and-widgets overview, not a container-stats dashboard, and does
+      # not need host Docker access to be useful.
+    ports:
+      - "{{ homepage_host_port }}:3000"
+    networks:
+      - {{ homepage_network }}
+
+networks:
+  {{ homepage_network }}:
+    external: true

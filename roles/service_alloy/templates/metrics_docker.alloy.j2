@@ -1,0 +1,55 @@
+// cAdvisor is not a separate service — it is a library vendored INTO Alloy, so this IS Alloy
+// collecting container metrics.
+//
+// KNOWN LIMITATION IN LXC (NOT solved).
+// On the overlay2 driver cAdvisor resolves a cgroup to a container by reading Docker's on-disk
+// layer DB (/var/lib/docker/image/overlay2/layerdb/mounts/<id>/mount-id). Inside a Proxmox LXC
+// guest that read returns EPERM even for root, while `cat` of that exact file as root succeeds
+// from the Proxmox host — so it is not a Unix permission bit; it is the syscall/namespace path
+// cAdvisor uses. cAdvisor's reaction to a failed lookup is to DISCARD the
+// container rather than emit it unenriched.
+//
+// Symptom, and why it is easy to miss: container_* series still arrive and the exporter looks
+// healthy, but every one of them is an LXC-level cgroup (/, /.lxc, /init.scope, /system.slice).
+// There is NOT ONE per-container series, and no series carries a `name` label. Privileged and
+// unprivileged guests behave the same, so it is not about the privileged flag.
+//
+// Tried and did NOT fix it: running the service as root (see tasks/systemd.yml), and setting
+// containerd_host below to the live containerd socket (which does list these exact containers via
+// `ctr -n moby containers list`). Both are kept because both are correct and harmless.
+//
+// So per-container docker metrics are NOT collected inside LXC. Host-level metrics and ALL LOGS,
+// including per-container docker logs, are unaffected and work. Options if per-container metrics
+// are wanted: run cAdvisor itself as a privileged container per guest, or scrape each service's
+// own exporter. Do not "fix" this by deleting the block —
+// the LXC-level series it does produce are still used.
+prometheus.exporter.cadvisor "dockermetrics" {
+  docker_host = "unix:///var/run/docker.sock"
+  containerd_host = "{{ config.metrics_docker.containerd_host | default(alloy_config__default.metrics_docker.containerd_host) }}"
+  storage_duration = "{{ config.metrics_docker.storage_duration | default(alloy_config__default.metrics_docker.storage_duration) }}"
+}
+
+discovery.relabel "dockermetrics" {
+    targets = prometheus.exporter.cadvisor.dockermetrics.targets
+
+    rule {
+        target_label = "job"
+        replacement  = "dockermetrics"
+    }
+
+    // Honours hostname_override for the same reason the self/unix exporters do: constants.hostname
+    // reads the TRANSIENT hostname, which can be the FQDN set by DHCP while /etc/hostname holds the
+    // short name. Without this the container metrics arrive under a second
+    // identity and no dashboard or alert matching the short name sees them.
+    rule {
+        target_label = "instance"
+        replacement  = {{ ('"' ~ config.hostname_override ~ '"') if config.hostname_override is defined and config.hostname_override else "constants.hostname" }}
+    }
+}
+
+prometheus.scrape "dockermetrics" {
+  targets = discovery.relabel.dockermetrics.output
+  forward_to = [ prometheus.remote_write.docker.receiver ]
+  scrape_interval = "{{ config.metrics_docker.scrape_interval | default(alloy_config__default.metrics_docker.scrape_interval) }}"
+  job_name      = "dockermetrics"
+}

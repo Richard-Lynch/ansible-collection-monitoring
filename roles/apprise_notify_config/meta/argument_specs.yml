@@ -1,0 +1,81 @@
+---
+# AUTO-GENERATED argument spec — DO NOT EDIT.
+#
+# Source of truth: roles/apprise_notify_config/meta/argument_specs.py
+# Regenerate:      venv/bin/python tools/argspec/cli.py x generate apprise_notify_config
+#
+# Edits here are silently overwritten on the next generation. To change a value or its
+# documentation, change the OptionSpec in the source file above — descriptions there
+# are emitted as the comments in this file.
+argument_specs:
+  main:
+    short_description: Configure an Apprise config-id with HA / email / Slack targets
+    version_added: '1.0'
+    author: Collection maintainers
+    options:
+      apprise_notify_base_url:
+        description:
+          - Apprise API base URL.
+        type: str
+        required: false
+      apprise_notify_config_id:
+        description:
+          - Stateful config-id (Alertmanager notify target).
+        type: str
+        required: false
+      apprise_notify_ha_enabled:
+        description:
+          - Enable the Home Assistant target.
+        type: bool
+        required: false
+        default: true
+      apprise_notify_ha_host:
+        description:
+          - HA host (installation config, no default). Empty skips the HA target.
+        type: str
+        required: false
+      apprise_notify_ha_port:
+        description:
+          - HA port.
+        type: int
+        required: false
+      apprise_notify_ha_token:
+        description:
+          - HA long-lived token, resolved by the caller from its secret store. Empty skips the HA target.
+        type: str
+        required: false
+        no_log: true
+      apprise_notify_email_enabled:
+        description:
+          - Enable the email target.
+        type: bool
+        required: false
+        default: true
+      apprise_notify_email_user:
+        description:
+          - SMTP/Gmail sender address.
+        type: str
+        required: false
+      apprise_notify_email_password:
+        description:
+          - Email app password.
+        type: str
+        required: false
+        no_log: true
+      apprise_notify_email_to:
+        description:
+          - Destination address.
+        type: str
+        required: false
+      apprise_notify_slack_enabled:
+        description:
+          - Enable the Slack target.
+        type: bool
+        required: false
+        default: false
+      apprise_notify_slack_url:
+        description:
+          - Apprise slack:// URL / webhook path.
+        type: str
+        required: false
+        no_log: true

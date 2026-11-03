@@ -1,0 +1,46 @@
+---
+# Work out HOW Alloy must be installed on this host, before anything tries to install it.
+#
+# WHY NOT `ansible_os_family` OR `ansible_pkg_mgr`. Both are wrong for an ostree desktop distro:
+#
+#   Debian/Ubuntu host      os_family=Debian            pkg_mgr=apt
+#   ostree desktop distro   os_family=<its own string>  pkg_mgr=dnf5
+#
+#   * os_family can be the distro's own string, NOT "RedHat", so a
+#     `when: ansible_os_family == "RedHat"` branch silently never matches and the host falls
+#     through to whatever the default is.
+#   * pkg_mgr=dnf5 is a TRAP. dnf exists on that machine and CAN install packages, but into a
+#     layered rpm-ostree overlay rather than /usr: every layered package is re-resolved on each
+#     upgrade, a conflict with a newer base image BLOCKS updates entirely, and a rebase
+#     re-resolves the whole set. Dispatching on "has dnf" would choose exactly the install
+#     method this role avoids.
+#
+# So the question is not "which distro" but "is this an image-based OS?", which is a statement
+# about how software must be installed rather than about branding. /run/ostree-booted exists
+# exactly when the running system is ostree-managed.
+
+- name: Check whether this host booted from an ostree image
+  ansible.builtin.stat:
+    path: /run/ostree-booted
+  register: _alloy_ostree
+
+- name: Decide the install method
+  ansible.builtin.set_fact:
+    alloy_install_method: >-
+      {{ 'binary' if _alloy_ostree.stat.exists
+         else ('apt' if ansible_pkg_mgr == 'apt'
+         else 'unsupported') }}
+
+- name: Refuse to continue on a platform with no install path
+  # An explicit failure, not a default. A telemetry agent that quietly installs nothing is a
+  # silent guard: the play would report `ok`, no metrics would ever arrive, and the gap would
+  # surface weeks later as "why is that host missing".
+  ansible.builtin.assert:
+    that:
+      - alloy_install_method != 'unsupported'
+    fail_msg: >-
+      No Alloy install path for this host: ostree={{ _alloy_ostree.stat.exists }},
+      pkg_mgr={{ ansible_pkg_mgr }}, os_family={{ ansible_os_family }}.
+      Add a branch to detect_platform.yml rather than letting the role no-op.
+    success_msg: "Alloy install method: {{ alloy_install_method }}"
+    quiet: true

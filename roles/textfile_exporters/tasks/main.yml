@@ -1,0 +1,268 @@
+---
+# Installs Prometheus textfile-collector exporters and their systemd timers.
+#
+# Several exporters, one role, because they share all the plumbing (collector directory, timer
+# pattern, atomic-write contract) and differ only in the script and which hosts want them:
+#
+#   txe_gpu=true          Intel GPU telemetry from sysfs        -- the host holding the GPU
+#   txe_docker=true       container health from docker inspect  -- any docker host
+#   txe_wan_ip=true       public egress IP                      -- ONE host behind the uplink
+#   txe_wireguard=true    WireGuard tunnel state                -- the monitored end of a link
+#   txe_ha_recorder=true  Home Assistant recorder staleness     -- a monitoring host, never HA
+#
+# WHY A TIMER AND NOT A DAEMON. Every script is single-shot: read, write a .prom, exit. A
+# long-running process would add a supervision problem for no benefit, and the textfile collector's
+# whole contract is "read whatever file is on disk at scrape time".
+#
+# ORDERING vs THE SCRAPE. The timer interval (30s) is deliberately shorter than the scrape interval,
+# so a scrape always finds a file that is at most one interval stale. Every script writes via
+# .tmp + rename, so a scrape landing mid-write reads the previous complete file rather than a
+# truncated one.
+#
+# See this role's README.md.
+
+- name: Setup vars
+  ansible.builtin.include_tasks: setup_vars.yml
+
+- name: Report what would be installed
+  ansible.builtin.debug:
+    msg:
+      - "host          : {{ inventory_hostname }}"
+      - "collector dir : {{ txe_collector_dir }}"
+      - "GPU exporter  : {{ 'INSTALL' if txe_gpu | bool else 'skip' }}"
+      - "docker export : {{ 'INSTALL' if txe_docker | bool else 'skip' }}"
+      - "WireGuard exp : {{ ('INSTALL (' ~ txe_wireguard_interface ~ ')') if txe_wireguard | bool else 'skip' }}"
+      - "WAN IP export : {{ ('INSTALL (expects ' ~ (txe_wan_ip_expected | default('') | ternary(txe_wan_ip_expected, 'no pinned address')) ~ ')') if txe_wan_ip |
+        bool else 'skip' }}"
+      - "HA recorder   : {{ ('INSTALL (' ~ txe_ha_recorder_base_url ~ ', window '
+        ~ txe_ha_recorder_window_seconds ~ 's)') if txe_ha_recorder | bool else 'skip' }}"
+      - "interval      : {{ txe_interval }}"
+      - "{{ 'DRY RUN — nothing written. Re-run with txe_apply=true.' if not (txe_apply | bool) else 'APPLYING.' }}"
+
+- name: HARD GATE — at least one exporter must be selected
+  # Silently installing nothing is the failure mode here: the play goes green, no metrics appear,
+  # and the dashboard is blank for a reason nobody can see.
+  ansible.builtin.assert:
+    that:
+      - (txe_gpu | bool) or (txe_docker | bool) or (txe_wan_ip | bool) or (txe_wireguard | bool)
+        or (txe_ha_recorder | bool)
+    fail_msg: >-
+      None of txe_gpu / txe_docker / txe_wan_ip / txe_wireguard / txe_ha_recorder is true for
+      {{ inventory_hostname }} — this role
+      would install nothing. Set one in the play or inventory.
+    success_msg: "At least one exporter selected."
+    quiet: true
+
+- name: HARD GATE — the HA recorder exporter needs somewhere to point
+  # Without a base URL the script's probe can only ever fail, so it would install cleanly, pass
+  # every other gate, and then report ha_recorder_probe_success 0 forever — which is
+  # indistinguishable from Home Assistant actually being unreachable. An exporter that is
+  # permanently blind looks exactly like a real outage.
+  ansible.builtin.assert:
+    that:
+      - txe_ha_recorder_base_url | default('') | length > 0
+      - txe_ha_recorder_token_file | default('') | length > 0
+    fail_msg: >-
+      txe_ha_recorder is true but txe_ha_recorder_base_url / txe_ha_recorder_token_file are not
+      both set. The exporter would install and report a failed probe forever, which reads as
+      "Home Assistant is down" rather than "this exporter was never configured".
+    success_msg: "HA recorder exporter has a base URL and a token path."
+    quiet: true
+  when: txe_ha_recorder | bool
+
+- name: Install the exporters
+  when: txe_apply | bool
+  block:
+    - name: Create the textfile collector directory
+      ansible.builtin.file:
+        path: "{{ txe_collector_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Install the exporter scripts
+      ansible.builtin.copy:
+        src: "{{ item.src }}"
+        dest: "/usr/local/bin/{{ item.src }}"
+        mode: "0755"
+      loop: "{{ _txe_selected }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Install the systemd services
+      ansible.builtin.copy:
+        dest: "/etc/systemd/system/{{ item.name }}.service"
+        mode: "0644"
+        content: |
+          [Unit]
+          Description={{ item.description }}
+          # Documentation, not a gate: the script fails soft on a missing source and emits an
+          # explicit zero/absent signal, which is more useful than not running at all.
+          Documentation=file:///usr/local/bin/{{ item.src }}
+
+          [Service]
+          Type=oneshot
+          ExecStart=/usr/local/bin/{{ item.src }} {{ txe_collector_dir }}/{{ item.out }}{{ ' ' ~ item.args if item.args | default('') | length > 0 else '' }}
+          # Never let a broken exporter mark the unit failed forever and spam the journal: the
+          # metric's ABSENCE is the signal, and a gap in the graph is the intended symptom.
+          SuccessExitStatus=0
+      loop: "{{ _txe_selected }}"
+      loop_control:
+        label: "{{ item.name }}"
+      notify: Reload systemd
+
+    - name: Install the systemd timers
+      ansible.builtin.copy:
+        dest: "/etc/systemd/system/{{ item.name }}.timer"
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Run {{ item.description }} every {{ txe_interval }}
+
+          [Timer]
+          # OnBootSec so metrics resume shortly after a reboot without waiting a full interval --
+          # a reboot is exactly when someone is watching the dashboard.
+          OnBootSec=30s
+          OnUnitActiveSec={{ txe_interval }}
+          AccuracySec=1s
+          Unit={{ item.name }}.service
+
+          [Install]
+          WantedBy=timers.target
+      loop: "{{ _txe_selected }}"
+      loop_control:
+        label: "{{ item.name }}"
+      notify: Reload systemd
+
+    - name: Reload systemd now
+      # Explicit flush: the timers are enabled and started in the very next task, which would
+      # otherwise act on unit files systemd has not read yet.
+      ansible.builtin.meta: flush_handlers
+
+    - name: Enable and start the timers
+      ansible.builtin.systemd:
+        name: "{{ item.name }}.timer"
+        enabled: true
+        state: started
+      loop: "{{ _txe_selected }}"
+      loop_control:
+        label: "{{ item.name }}.timer"
+
+    - name: Run each exporter once now
+      # So the read-back below has something to check, and so metrics exist immediately rather than
+      # after the first timer tick.
+      #
+      # ALWAYS REPORTS CHANGED, by design. A Type=oneshot unit is inactive once it has finished, so
+      # `state: started` genuinely starts it every run. That is the intended behaviour here — this
+      # is a sampling command, not a service to converge — and the surrounding tasks ARE idempotent,
+      # so a repeat run shows exactly this one task as changed and nothing else. Suppressing it with
+      # changed_when: false would hide a real action rather than make the role more idempotent.
+      ansible.builtin.systemd:
+        name: "{{ item.name }}.service"
+        state: started
+      loop: "{{ _txe_selected }}"
+      loop_control:
+        label: "{{ item.name }}.service"
+
+    - name: Read the emitted metrics back
+      # The unit is Type=oneshot and the script fails soft, so a green systemd start proves only
+      # that the script RAN — not that it produced anything. This checks the actual output.
+      ansible.builtin.command:
+        argv: [cat, "{{ txe_collector_dir }}/{{ item.out }}"]
+      register: _txe_read
+      changed_when: false
+      failed_when: false
+      loop: "{{ _txe_selected }}"
+      loop_control:
+        label: "{{ item.out }}"
+
+    - name: HARD GATE — every installed exporter must have emitted at least one sample
+      # Counts non-comment lines. A file of only HELP/TYPE headers means the exporter found nothing
+      # and would leave the dashboard silently empty.
+      ansible.builtin.assert:
+        that:
+          - (item.stdout_lines | default([]) | reject('match', '^#') | list | length) > 0
+        fail_msg: >-
+          {{ item.item.name }} produced no samples in {{ txe_collector_dir }}/{{ item.item.out }}.
+          Run /usr/local/bin/{{ item.item.src }} by hand on {{ inventory_hostname }} to see why.
+        success_msg: >-
+          {{ item.item.name }}: {{ item.stdout_lines | default([]) | reject('match', '^#')
+             | list | length }} samples.
+        quiet: true
+      loop: "{{ _txe_read.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+
+    - name: HARD GATE — the exposition format must actually PARSE
+      # A sample count proves the file has content, NOT that Prometheus can read it. The text format
+      # allows exactly one HELP line per metric name, and a second one makes node_exporter reject
+      # the WHOLE FILE with node_textfile_scrape_error=1 while the file sits on disk looking
+      # perfectly healthy — valid samples, every series dropped, and the sample-count gate above
+      # passing clean.
+      #
+      # Checked structurally rather than by shelling out to promtool, which a target host usually
+      # does not have. Duplicate HELP/TYPE per metric name is the failure this catches.
+      vars:
+        _help_names: >-
+          {{ item.stdout_lines | default([]) | select('match', '^# HELP ')
+             | map('regex_replace', '^# HELP (\S+).*$', '\1') | list }}
+        _type_names: >-
+          {{ item.stdout_lines | default([]) | select('match', '^# TYPE ')
+             | map('regex_replace', '^# TYPE (\S+).*$', '\1') | list }}
+      ansible.builtin.assert:
+        that:
+          - (_help_names | length) == (_help_names | unique | length)
+          - (_type_names | length) == (_type_names | unique | length)
+        fail_msg: >-
+          {{ txe_collector_dir }}/{{ item.item.out }} is NOT valid Prometheus exposition format:
+          duplicate HELP for {{ _help_names | difference(_help_names | unique) | unique }},
+          duplicate TYPE for {{ _type_names | difference(_type_names | unique) | unique }}.
+          node_exporter would silently drop every series in this file. Each metric name gets
+          exactly ONE HELP and ONE TYPE line, however long.
+        success_msg: >-
+          {{ item.item.name }}: exposition format valid
+          ({{ _help_names | length }} metrics documented).
+        quiet: true
+      loop: "{{ _txe_read.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+
+    - name: Confirm the collector accepted the file, where a scraper is present
+      # The definitive check: node_exporter's own verdict. node_textfile_scrape_error goes to 1 for
+      # ANY parse failure, including ones the structural check above does not model. Skipped where
+      # nothing serves :9100 (hosts scraped by Alloy), since there the collector lives in Alloy.
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:9100/metrics"
+        return_content: true
+      register: _txe_scrape
+      failed_when: false
+      changed_when: false
+
+    - name: HARD GATE — node_exporter must not be reporting a textfile parse error
+      # MATCHED ON A WHOLE LINE, not as a substring of the page. The obvious
+      # `'node_textfile_scrape_error 1' not in content` is WRONG and fails against a perfectly
+      # healthy exporter: the metric's own HELP text reads "1 if there was an error opening or
+      # reading a file, 0 otherwise", so the needle appears in the documentation line regardless of
+      # the value. Select the sample line and compare the value.
+      vars:
+        _txe_err: >-
+          {{ (_txe_scrape.content | default('')).splitlines()
+             | select('match', '^node_textfile_scrape_error( |\{)') | list }}
+      ansible.builtin.assert:
+        that:
+          - _txe_err | select('search', '\s1(\.0+)?$') | list | length == 0
+        fail_msg: >-
+          node_exporter on {{ inventory_hostname }} reports node_textfile_scrape_error=1 — it is
+          REJECTING a file in {{ txe_collector_dir }}, so those metrics do not exist in Prometheus
+          despite being written to disk. See: journalctl -u node_exporter | grep textfile
+        success_msg: "node_exporter parsed the textfile metrics cleanly."
+        quiet: true
+      when: (_txe_scrape.status | default(0)) == 200
+
+    - name: Report
+      ansible.builtin.debug:
+        msg:
+          - "Installed on {{ inventory_hostname }}:"
+          - "{{ _txe_selected | map(attribute='name') | list }}"
+          - "Metrics land in {{ txe_collector_dir }}/ for the host's textfile collector (Alloy or node_exporter)."
+          - "ROLLBACK: systemctl disable --now <name>.timer && rm /etc/systemd/system/<name>.{service,timer}"
+          - "          rm /usr/local/bin/<script> {{ txe_collector_dir }}/<name>.prom"

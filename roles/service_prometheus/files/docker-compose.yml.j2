@@ -1,0 +1,30 @@
+services:
+  {{ prometheus__name }}:
+    image: prom/prometheus:{{ prometheus_image_version }}
+    container_name: {{ prometheus__name }}
+    restart: unless-stopped
+    volumes:
+      - {{ prometheus__config_dir }}/config:/etc/prometheus
+      - {{ prometheus__name }}_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      # Retention caps — unbounded TSDB growth fills the disk. Bound BOTH time and size.
+      - "--storage.tsdb.retention.time={{ prometheus_retention_time }}"
+      - "--storage.tsdb.retention.size={{ prometheus_retention_size }}"
+      - "--web.enable-lifecycle"
+      # HA seam: lets another Prometheus / Alloy remote-write into this instance later.
+      - "--web.enable-remote-write-receiver"
+    ports:
+      - "{{ prometheus_host_port }}:9090"
+    networks:
+      - {{ prometheus_network }}
+
+networks:
+  # Shared external network — every monitoring service joins it and wires by container name
+  # (http://prometheus:9090, http://grafana:3000, …). Created by the role (attachable).
+  {{ prometheus_network }}:
+    external: true
+
+volumes:
+  {{ prometheus__name }}_data:
