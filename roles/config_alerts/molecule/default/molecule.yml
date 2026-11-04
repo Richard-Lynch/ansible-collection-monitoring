@@ -1,5 +1,6 @@
 # Offline scenario — exercises the role's REAL rendering and guard logic with no Prometheus and no
-# docker. Validation and reload are switched off by the scenario (both require the container), and
+# docker. Validation and reload are switched off for the direct includes (both require the
+# container); the one --check run turns them on against a fake docker (see check_mode.yml).
 # config_alerts_dir points at a temp dir, so nothing outside it is touched.
 ---
 dependency:

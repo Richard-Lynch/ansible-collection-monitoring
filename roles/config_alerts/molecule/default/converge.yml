@@ -149,6 +149,77 @@
           ansible.builtin.set_fact:
             _empty_failed: true
 
+    # --- 6. a real --check run with validation and reload ON --------------------------------------
+    # The dry run of every play that registers rules. It fails at the docker cp step when that step
+    # reads the `dest` of a staging result, which --check only simulates. check_mode.yml says why
+    # it is a nested ansible-playbook rather than an include here.
+    - name: Make a bin dir for the fake docker
+      ansible.builtin.file:
+        path: "{{ _tmp }}/bin"
+        state: directory
+        mode: "0755"
+
+    - name: Install a fake docker that records its calls
+      ansible.builtin.copy:
+        dest: "{{ _tmp }}/bin/docker"
+        mode: "0755"
+        content: |
+          #!/bin/sh
+          echo "$*" >> {{ _tmp }}/docker-calls.log
+          case "$3" in molecule-absent:*)
+            echo "Error response from daemon: No such container: molecule-absent" >&2
+            exit 1 ;;
+          esac
+          if [ "$1" = cp ] && [ ! -f "$2" ]; then
+            echo "fake docker: no such file: $2" >&2
+            exit 1
+          fi
+          exit 0
+
+    - name: Clear a previous run's docker call log
+      # The scenario has no destroy step, so /tmp outlives a run: without this, verify could read
+      # an earlier run's calls.
+      ansible.builtin.file:
+        path: "{{ _tmp }}/docker-calls.log"
+        state: absent
+      changed_when: false
+
+    - name: The rules directory exists, as it does on a deployed host
+      ansible.builtin.file:
+        path: "{{ _tmp }}/check-rules"
+        state: directory
+        mode: "0755"
+
+    - name: Run the role under a real --check
+      # ansible-playbook from PATH, as molecule itself runs it; the scenario's ANSIBLE_ROLES_PATH and
+      # ANSIBLE_COLLECTIONS_PATH reach it through the environment.
+      ansible.builtin.command:
+        argv:
+          - ansible-playbook
+          - --check
+          - -i
+          - localhost,
+          - -c
+          - local
+          - -e
+          - "ansible_python_interpreter={{ ansible_playbook_python }}"
+          - "{{ playbook_dir }}/check_mode.yml"
+      environment:
+        PATH: "{{ _tmp }}/bin:{{ lookup('env', 'PATH') }}"
+      register: _check_run
+      changed_when: false
+      failed_when: false
+
+    - name: List the rules directory after the --check run
+      ansible.builtin.find:
+        paths: "{{ _tmp }}/check-rules"
+      register: _check_rules
+
+    - name: Look for the staged candidate on the host
+      ansible.builtin.stat:
+        path: /tmp/config-alerts-molecule-check-candidate.yml
+      register: _check_candidate
+
     - name: Hand the results to verify.yml
       # set_fact does not cross molecule's converge/verify playbook boundary; a file does.
       ansible.builtin.copy:
@@ -159,4 +230,11 @@
                'c_existed_before_removal': _c_before.stat.exists,
                'traversal_failed': _traversal_failed,
                'empty_failed': _empty_failed,
+               'check_rc': _check_run.rc,
+               'check_tail': (_check_run.stdout_lines + _check_run.stderr_lines)[-15:],
+               'check_not_validated': _check_run.stdout is search('rules were NOT validated'),
+               'check_files': _check_rules.files | map(attribute='path') | list,
+               'check_candidate_left': _check_candidate.stat.exists,
+               'docker_calls': lookup('ansible.builtin.file', _tmp ~ '/docker-calls.log',
+                                      errors='ignore') | default('', true),
              } | to_nice_json }}

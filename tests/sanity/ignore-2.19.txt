@@ -1,0 +1,2 @@
+ci/affected-scenarios.sh shellcheck:SC2086
+ci/affected-scenarios.sh shellcheck:SC2164

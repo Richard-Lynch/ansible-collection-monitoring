@@ -10,6 +10,7 @@
 CHANGELOG.md
 LICENSE
 README.md
+ci/affected-scenarios.sh
 configured_roles.txt
 devkit.toml
 export.manifest
@@ -31,6 +32,7 @@ roles/config_alerts/defaults/main.yml
 roles/config_alerts/meta/argument_specs.py
 roles/config_alerts/meta/argument_specs.yml
 roles/config_alerts/meta/main.yml
+roles/config_alerts/molecule/default/check_mode.yml
 roles/config_alerts/molecule/default/converge.yml
 roles/config_alerts/molecule/default/molecule.yml
 roles/config_alerts/molecule/default/verify.yml
@@ -239,3 +241,6 @@ roles/textfile_exporters/molecule/default/verify.yml
 roles/textfile_exporters/tasks/_resolve_defaults.yml
 roles/textfile_exporters/tasks/main.yml
 roles/textfile_exporters/tasks/setup_vars.yml
+tests/sanity/ignore-2.19.txt
+tests/sanity/ignore-2.20.txt
+tests/sanity/ignore-2.21.txt

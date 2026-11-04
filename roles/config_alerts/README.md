@@ -81,6 +81,10 @@ these resolve.
   first, so an invalid file never reaches the rules directory even briefly. Gates on `rc`, not on
   stdout emptiness — promtool writes diagnostics to stdout, so non-empty output does not mean
   success.
+- **Previews under `--check`.** The validation still runs (it only stages, checks and removes
+  scratch files); nothing is installed, and the reload and the read-back are skipped. When the
+  container does not exist yet (a play that deploys it has only simulated that), the run says the
+  rules were not validated instead of failing.
 - **Reloads inline, not via a handler.** A handler runs at play end, so anything later in the same
   run reads the pre-reload state — and a reload guard that reads stale state produces false
   alerts.
