@@ -9,6 +9,16 @@ All notable changes to this collection are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the collection
 uses [Semantic Versioning](https://semver.org/).
 
+## [1.0.3] — 2026-11-04
+
+### Changed
+
+- The CI, release and disclose callers use ansible-devkit `v0.3.2`, whose CI selects molecule scenarios with `ci/affected-scenarios.sh` (shipped in the repository, not in the built collection; the sanity ignores cover its two intended shellcheck notes).
+
+### Fixed
+
+- `config_alerts` runs to the end under `--check`. The promtool validation read the staged candidate's path from the staging task's result, which a check-mode run does not produce, so every dry run of a play that registers rules failed at the copy into the container. The validation now runs under `--check` too (it stages, checks and removes scratch files only); when the container does not exist yet, the run reports that the rules were not validated instead of failing. The reload and the loaded-rules read-back are skipped, since nothing was installed. The molecule scenario runs the role under a real `--check` with validation and reload on.
+
 ## [1.0.2] — 2026-11-03
 
 ### Fixed

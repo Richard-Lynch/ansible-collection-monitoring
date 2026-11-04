@@ -1,0 +1,45 @@
+# Run by converge.yml as a NESTED `ansible-playbook --check`, because only a real --check sets
+# ansible_check_mode: a task-level `check_mode: true` does not, so it cannot exercise the role the
+# way a dry run of a play does.
+#
+# Validation and reload are ON, as in a real play. The container is a fake `docker` that converge.yml
+# puts first on PATH: it records each call and fails `docker cp` when the source file is missing, so
+# the run proves the candidate really was staged under --check before it was copied.
+---
+- name: Run config_alerts under --check with validation and reload on
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Install rules for an owner, as a play would
+      ansible.builtin.include_role:
+        name: config_alerts
+      vars:
+        config_alerts_owner: molecule-check
+        config_alerts_dir: /tmp/molecule-config-alerts/check-rules
+        config_alerts_container: molecule-fake-prometheus
+        config_alerts_validate: true
+        config_alerts_reload: true
+        config_alerts_groups:
+          - name: molecule-check
+            rules:
+              - alert: CheckModeRule
+                expr: vector(1)
+
+    - name: Install rules into a container that does not exist yet
+      # As in a dry run of a play that deploys the container itself: --check only simulated it.
+      # The fake docker answers "No such container"; the run must say the rules were not
+      # validated, and go on.
+      ansible.builtin.include_role:
+        name: config_alerts
+      vars:
+        config_alerts_owner: molecule-absent
+        config_alerts_dir: /tmp/molecule-config-alerts/check-rules
+        config_alerts_container: molecule-absent
+        config_alerts_validate: true
+        config_alerts_reload: true
+        config_alerts_groups:
+          - name: molecule-absent
+            rules:
+              - alert: AbsentContainerRule
+                expr: vector(1)

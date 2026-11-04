@@ -23,7 +23,7 @@ Observability roles: Prometheus, Alertmanager, Loki, Grafana, Alloy, node_export
 | `service_grafana` | Deploy Grafana (Postgres backend, provisioned datasources) on a shared net |
 | `service_homepage` | Deploy gethomepage/homepage as a validated links-and-widgets dashboard |
 | `service_loki` | Deploys Loki (tsdb, retention-compacted) on the shared monitoring network |
-| `service_node_exporter` |  |
+| `service_node_exporter` | Install Prometheus node_exporter as a Docker Compose service or as a pinned release binary under systemd, optionally with the textfile collector; binary mode confirms the exporter serves metrics. |
 | `service_prometheus` | Deploys Prometheus (retention-capped) on the shared monitoring network |
 | `service_uptime_kuma` | Deploy Uptime Kuma, loopback-bound by default (dead-man heartbeat receiver) |
 | `textfile_exporters` | Prometheus textfile exporters: GPU, Docker, WAN IP, WireGuard, HA recorder |
@@ -39,7 +39,7 @@ or pin it in `requirements.yml`:
 ```yaml
 collections:
   - name: richard_lynch.monitoring
-    version: "1.0.0"
+    version: "1.0.3"
 ```
 
 Requires ansible-core >=2.19.0.
@@ -57,7 +57,7 @@ devkit check all                # the static checks, configured by devkit.toml
 
 CI, the disclosure gate and releases are the shared workflows of
 [ansible-devkit](https://github.com/Richard-Lynch/ansible-devkit), called from
-`.github/workflows/` at tag `v0.2.2`. A release is a merged pull
+`.github/workflows/` at tag `v0.3.2`. A release is a merged pull
 request that bumps `version` in `galaxy.yml` and adds the matching
 `CHANGELOG.md` section. `export.manifest` lists every tracked path; update it in
 the same commit as any file added or removed.

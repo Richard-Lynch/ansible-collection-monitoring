@@ -4,7 +4,7 @@
 ---
 namespace: richard_lynch
 name: monitoring
-version: 1.0.2
+version: 1.0.3
 readme: README.md
 authors:
   - Richard Lynch
@@ -28,6 +28,7 @@ homepage: https://github.com/Richard-Lynch/ansible-collection-monitoring
 issues: https://github.com/Richard-Lynch/ansible-collection-monitoring/issues
 build_ignore:
   - .ansible-lint
+  - ci
   - configured_roles.txt
   - roles/*/defaults/SKIP
   - .github

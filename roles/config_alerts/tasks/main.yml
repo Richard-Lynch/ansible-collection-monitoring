@@ -35,6 +35,9 @@
 - name: Set the owner's rule file path
   ansible.builtin.set_fact:
     _car_path: "{{ config_alerts_dir }}/{{ config_alerts_owner }}.yml"
+    # The scratch candidate's path, named once. Read from here, never from the staging task's
+    # registered `dest`: a result simulated under --check carries no `dest`.
+    _car_candidate: "/tmp/config-alerts-{{ config_alerts_owner }}-candidate.yml"
     # Rendered ONCE here, not inline at each use, so the installed bytes and the validated bytes
     # are provably the same string.
     #
@@ -67,6 +70,11 @@
 # does not degrade coverage, it removes this owner's coverage entirely — and a reload still returns
 # 200, so nothing reports a problem. Validation happens against a scratch copy so a bad file never
 # reaches the rules directory even briefly.
+#
+# UNDER --check THE VALIDATION STILL RUNS (check_mode: false on each step). It is a read that uses
+# scratch files: the candidate is staged, checked and removed in the same run, so the host and the
+# container end as they began, and a dry run that skipped it could not say whether the rules would
+# be accepted. What --check does not do is install or reload (the steps below this block).
 - name: Validate the rendered rules with promtool
   when:
     - config_alerts_state == 'present'
@@ -75,17 +83,31 @@
     - name: Stage the candidate rules outside the rules directory
       ansible.builtin.copy:
         content: "{{ _car_content }}"
-        dest: "/tmp/config-alerts-{{ config_alerts_owner }}-candidate.yml"
+        dest: "{{ _car_candidate }}"
         mode: "0644"
-      register: _car_staged
       changed_when: false
+      check_mode: false
 
     - name: Copy the candidate into the prometheus container
       ansible.builtin.command:
         cmd: >-
-          docker cp {{ _car_staged.dest }}
+          docker cp {{ _car_candidate }}
           {{ config_alerts_container }}:/tmp/{{ config_alerts_owner }}-candidate.yml
+      register: _car_copied
       changed_when: false
+      # Under --check a play that deploys the container has only simulated it, so the container
+      # may not exist yet: that is reported below as "not validated", never as a pass. A real run
+      # fails here.
+      failed_when: _car_copied.rc != 0 and not ansible_check_mode
+      check_mode: false
+
+    - name: Say that --check could not validate the rules
+      ansible.builtin.debug:
+        msg: >-
+          --check: could not copy the candidate into '{{ config_alerts_container }}'
+          ({{ _car_copied.stderr | default('') | trim }}), so owner '{{ config_alerts_owner }}'
+          rules were NOT validated with promtool. A real run validates them, and fails here.
+      when: _car_copied.rc != 0
 
     - name: Run promtool over the candidate
       ansible.builtin.command:
@@ -95,6 +117,8 @@
       register: _car_promtool
       changed_when: false
       failed_when: false
+      check_mode: false
+      when: _car_copied.rc == 0
 
     - name: Fail when the rules are invalid
       # Gate on rc, never on stdout emptiness: promtool writes its diagnostics to stdout, so a
@@ -107,6 +131,7 @@
           Nothing was installed. {{ _car_promtool.stdout | default('') }}
           {{ _car_promtool.stderr | default('') }}
         success_msg: "promtool accepted owner '{{ config_alerts_owner }}' rules."
+      when: _car_copied.rc == 0
 
   always:
     - name: Remove the candidate from the container
@@ -116,6 +141,7 @@
           rm -f /tmp/{{ config_alerts_owner }}-candidate.yml
       changed_when: false
       failed_when: false
+      check_mode: false
 
     # The other half of the stage above: a scratch file created and deleted in the same run, so the
     # host ends every run exactly as it began (no candidate). Reporting `changed` here would make
@@ -123,10 +149,11 @@
     # so, like the stage, it is not a change to the host's state.
     - name: Remove the staged candidate from the host
       ansible.builtin.file:
-        path: "/tmp/config-alerts-{{ config_alerts_owner }}-candidate.yml"
+        path: "{{ _car_candidate }}"
         state: absent
       changed_when: false
       failed_when: false
+      check_mode: false
 
 # --- install / remove ---------------------------------------------------------------------------
 - name: Install this owner's rule file
@@ -154,15 +181,19 @@
     url: "http://localhost:9090/-/reload"
     method: POST
     status_code: [200]
+  # Not under --check: the install was only simulated, so there is nothing new to load.
   when:
+    - not ansible_check_mode
     - config_alerts_reload | bool
     - (_car_installed.changed | default(false)) or (_car_removed.changed | default(false))
 
 - name: Confirm Prometheus loaded this owner's rules
   # A file on disk that Prometheus never read is worth nothing, and a reload returning 200 does not
   # prove the rules are in effect. Read them back from the API — the authoritative source for what
-  # is actually loaded — rather than inferring success from the write.
+  # is actually loaded — rather than inferring success from the write. Not under --check: the
+  # install above was only simulated, so Prometheus cannot have loaded what it would write.
   when:
+    - not ansible_check_mode
     - config_alerts_state == 'present'
     - config_alerts_reload | bool
     - _car_installed.changed | default(false)

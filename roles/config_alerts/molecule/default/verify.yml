@@ -146,6 +146,28 @@
           An empty rule set was accepted for state=present. That writes an empty file and silently
           removes the owner's entire alert coverage while reporting success.
 
+    # --- a real --check run ------------------------------------------------------------------------
+    - name: Under --check the role ran to the end, validated, and installed nothing
+      # rc 0 needs the docker cp step to name the candidate without the staging result's `dest`,
+      # which --check only simulates. The call log proves validation still RAN rather than being
+      # skipped, and the empty rules directory proves --check wrote nothing. Reload and the
+      # read-back must be skipped: there is no Prometheus here, so a reload that ran would fail the
+      # run. A container that does not exist (the second include) is reported, not failed.
+      ansible.builtin.assert:
+        that:
+          - results.check_rc == 0
+          - "'cp /tmp/config-alerts-molecule-check-candidate.yml' in _calls"
+          - "'promtool check rules /tmp/molecule-check-candidate.yml' in _calls"
+          - results.check_files == []
+          - not results.check_candidate_left
+          - results.check_not_validated
+        fail_msg: >-
+          config_alerts under --check: rc={{ results.check_rc }}, files={{ results.check_files }},
+          candidate left={{ results.check_candidate_left }}, docker calls={{ _calls }}.
+          Last lines: {{ results.check_tail }}
+      vars:
+        _calls: "{{ results.docker_calls }}"
+
     - name: Report
       ansible.builtin.debug:
         msg:
