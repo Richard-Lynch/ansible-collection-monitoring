@@ -7,14 +7,17 @@
 .github/workflows/disclose.yml
 .github/workflows/release.yml
 .gitignore
+.python-version
 CHANGELOG.md
 LICENSE
 README.md
 configured_roles.txt
+deps-baseline.json
 devkit.toml
 export.manifest
 galaxy.yml
 meta/runtime.yml
+renovate.json
 roles/apprise_notify_config/README.md
 roles/apprise_notify_config/defaults/SKIP
 roles/apprise_notify_config/defaults/main.yml
