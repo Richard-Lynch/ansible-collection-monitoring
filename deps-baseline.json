@@ -1,0 +1,9 @@
+{
+  "_comment": "devkit check dependencies baseline: violations that existed when DEP-02..05 arrived. key = RULE|path|name, value = occurrences, and a reason for each. New ones FAIL; an entry that no longer occurs FAILS until removed. Regenerate with `devkit check dependencies --update-baseline` after a fix, never to admit a new one.",
+  "entries": {
+    "DEP-03|roles/service_node_exporter/defaults/main.yml|prom/node-exporter": 1
+  },
+  "reasons": {
+    "DEP-03|roles/service_node_exporter/defaults/main.yml|prom/node-exporter": "live deployment default; pinning it changes the running exporter, so it moves to a tested tag in its own release rather than in a CI change"
+  }
+}
