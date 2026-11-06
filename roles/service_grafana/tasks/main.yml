@@ -17,6 +17,13 @@
 - name: Deploy config
   ansible.builtin.include_role:
     name: richard_lynch.common.deployment_config
+    # grafana.env carries the admin and database passwords, and deployment_config renders it with
+    # a template task of its own that has no no_log, so --diff (or a failed render) would print
+    # them into the run log. `apply:` reaches the included role's tasks; the include's own
+    # keywords do not.
+    apply:
+      no_log: true
+      diff: false
   vars:
     deployment_config_source: "{{ grafana_files }}"
     deployment_config_destination: "{{ grafana_config_dir }}"
