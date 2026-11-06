@@ -61,6 +61,12 @@
         - ansible.builtin.set_fact: { _homepage_config_src: "{{ _fixtures }}/good" }
         - ansible.builtin.include_role: { name: service_homepage, tasks_from: validate }
         - ansible.builtin.set_fact: { _results: "{{ _results | combine({'good': 'passed'}) }}" }
+        # The good fixture renders sonarr's widget with the key FIXTURE. The flattened cards are
+        # not no_log, so they must carry no part of a widget block.
+        - ansible.builtin.set_fact:
+            _results: >-
+              {{ _results | combine({'cards_carry_key': (_homepage_cards | to_json) is search('FIXTURE'),
+                                     'cards': _homepage_cards | length}) }}
       rescue:
         - ansible.builtin.set_fact:
             _results: "{{ _results | combine({'good': ansible_failed_result.msg | default('failed')}) }}"

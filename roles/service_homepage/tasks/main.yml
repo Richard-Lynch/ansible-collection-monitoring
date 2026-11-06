@@ -34,6 +34,13 @@
 - name: Deploy the dashboard config
   ansible.builtin.include_role:
     name: richard_lynch.common.deployment_config
+    # The caller's dashboard config can carry widget API keys, and deployment_config renders it
+    # with a template task of its own that has no no_log, so --diff (or a failed render) would
+    # print them into the run log. `apply:` reaches the included role's tasks; the include's own
+    # keywords do not.
+    apply:
+      no_log: true
+      diff: false
   vars:
     deployment_config_source: "{{ _homepage_config_src }}"
     deployment_config_destination: "{{ homepage_config_dir }}/config"

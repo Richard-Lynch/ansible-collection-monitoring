@@ -44,6 +44,8 @@
         that:
           - r.defaults == 'passed'
           - r.good == 'passed'
+          - r.cards_carry_key == false
+          - r.cards | int > 0
           - r.mismatch is search('do not match settings.yaml layout keys')
           - r.forbidden is search('homepage_forbidden_href_patterns')
           - r.bookmark is search('homepage_bookmarks_forbidden_href_pattern')

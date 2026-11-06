@@ -44,13 +44,22 @@
 
 - name: Flatten every service card
   # Structure: [ {Section: [ {Name: {href: ...}}, ... ]}, ... ].
+  # Each card is reduced to its name and its href, the only fields the gates below read. A card's
+  # widget block carries the caller's API keys, so copying the whole card out of the no_log fact
+  # above would print them in this task's result.
   ansible.builtin.set_fact:
     _homepage_sections: "{{ _homepage_services | map('first') | list }}"
     _homepage_cards: >-
-      {{ _homepage_services
-         | map('dict2items') | map('first') | map(attribute='value')
-         | flatten(levels=1)
-         | map('dict2items') | map('first') | list }}
+      {%- set _cards = [] -%}
+      {%- for _c in _homepage_services
+            | map('dict2items') | map('first') | map(attribute='value')
+            | flatten(levels=1)
+            | map('dict2items') | map('first') -%}
+      {%- set _ = _cards.append({'key': _c.key,
+            'value': ({'href': _c.value.href}
+                      if (_c.value is mapping and _c.value.href is defined) else {})}) -%}
+      {%- endfor -%}
+      {{ _cards }}
 
 - name: HARD GATE — every services section has a settings layout entry (when a layout is declared)
   # Homepage renders a section with no layout entry unstyled and in arbitrary order, which looks

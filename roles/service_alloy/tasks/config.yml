@@ -18,6 +18,9 @@
     state: directory
     mode: "0755"
 
+# config_file is one of this role's own templates/*.alloy.j2, which render alloy_config
+# (endpoints, labels, paths) and no credential.
+# guard-check: ignore DIFFLEAK-01 — the role's own templates carry no credential
 - name: Deploy config files
   ansible.builtin.template:
     src: "{{ config_file }}"

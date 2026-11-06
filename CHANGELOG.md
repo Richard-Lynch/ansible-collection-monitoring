@@ -9,6 +9,18 @@ All notable changes to this collection are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the collection
 uses [Semantic Versioning](https://semver.org/).
 
+## [1.0.4] — 2026-11-06
+
+### Changed
+
+- The CI, release and disclose callers use ansible-devkit `v0.4.1`.
+
+### Fixed
+
+- `service_grafana` no longer prints the admin and database passwords under `--diff`: the include of `richard_lynch.common.deployment_config` that renders `grafana.env` passes `apply: {no_log: true, diff: false}`, which reaches the included template task.
+- `service_homepage` renders the caller's dashboard config the same way, so widget API keys are not printed under `--diff`. Its config validation reduces each service card to its name and href before the gates read it, so a card's widget block (and its key) no longer leaves the no_log fact it was rendered into.
+- `service_alert_manager` writes the mTLS client certificate and key with `no_log` and `diff: false`, renders `alertmanager.yml` (which carries the heartbeat push URL and its token) with `apply: {no_log: true, diff: false}`, and its HTTPS check on the heartbeat URL reports only the URL's scheme. `alertmanager_heartbeat_url` and `alertmanager_heartbeat_mtls_key` are `no_log` in the argument spec.
+
 ## [1.0.3] — 2026-11-04
 
 ### Changed

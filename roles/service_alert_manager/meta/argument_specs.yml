@@ -117,6 +117,7 @@ argument_specs:
           - the site's own death.
         type: str
         required: false
+        no_log: true
       alertmanager_heartbeat_interval:
         description:
           - How often the Watchdog re-notifies the heartbeat (route.repeat_interval for that branch).
@@ -144,3 +145,4 @@ argument_specs:
           - 'Same handling as the cert: written to a 0600 file, never logged.'
         type: str
         required: false
+        no_log: true

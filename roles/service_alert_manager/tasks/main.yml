@@ -18,8 +18,8 @@
       - alertmanager_heartbeat_url is match('^https://')
     fail_msg: >-
       alertmanager_heartbeat_url must be https:// — it crosses the network boundary to an off-site
-      host. Got:
-      {{ alertmanager_heartbeat_url | default('') }}
+      host. Got scheme '{{ alertmanager_heartbeat_url | default('') | ansible.builtin.urlsplit('scheme') }}'
+      (the URL itself is not printed: a push URL carries its token).
     quiet: true
   when: alertmanager_heartbeat_enabled | bool
 
@@ -54,10 +54,20 @@
   loop_control:
     label: "{{ item.name }}"
   when: alertmanager_heartbeat_mtls_enabled | bool
+  # The loop items carry the PEM content (the key is a private key): a recorded loop result, a
+  # failed task and --diff would otherwise print it.
+  no_log: true
+  diff: false
 
 - name: Deploy Alertmanager config
   ansible.builtin.include_role:
     name: richard_lynch.common.deployment_config
+    # alertmanager.yml carries the heartbeat push URL, whose path is its token, and deployment_config
+    # renders it with a template task of its own that has no no_log, so --diff (or a failed render)
+    # would print it into the run log. `apply:` reaches the included role's tasks.
+    apply:
+      no_log: true
+      diff: false
   vars:
     deployment_config_source: "{{ alertmanager_files }}"
     deployment_config_destination: "{{ alertmanager_config_dir }}"

@@ -104,6 +104,7 @@ argument_specs = ArgumentSpecs(
                     ],
                 ),
                 "alertmanager_heartbeat_url": OptionSpec(
+                    no_log=True,
                     type="str",
                     required=False,
                     description=[
@@ -147,6 +148,7 @@ argument_specs = ArgumentSpecs(
                     ],
                 ),
                 "alertmanager_heartbeat_mtls_key": OptionSpec(
+                    no_log=True,
                     type="str",
                     required=False,
                     description=[
