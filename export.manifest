@@ -15,9 +15,14 @@ ci/affected-scenarios.sh
 configured_roles.txt
 deps-baseline.json
 devkit.toml
+docs/resources/alertmanager_silence.md
 export.manifest
 galaxy.yml
 meta/runtime.yml
+plugins/module_utils/alertmanager/__init__.py
+plugins/module_utils/alertmanager/client.py
+plugins/modules/alertmanager_silence.py
+plugins/modules/alertmanager_silence_info.py
 renovate.json
 roles/apprise_notify_config/README.md
 roles/apprise_notify_config/defaults/SKIP
@@ -249,3 +254,5 @@ roles/textfile_exporters/tasks/setup_vars.yml
 tests/sanity/ignore-2.19.txt
 tests/sanity/ignore-2.20.txt
 tests/sanity/ignore-2.21.txt
+tests/unit/conftest.py
+tests/unit/plugins/modules/test_alertmanager_silence.py
