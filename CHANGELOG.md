@@ -9,6 +9,17 @@ All notable changes to this collection are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the collection
 uses [Semantic Versioning](https://semver.org/).
 
+## [1.1.1] — 2026-11-07
+
+### Fixed
+
+- **`alertmanager_silence` and `alertmanager_silence_info` run on a target.** 1.1.0 imported
+  `require_common` from `richard_lynch.common`'s module_utils PACKAGE; AnsiballZ ships module_utils
+  FILES and stubs the package `__init__.py`, so both modules passed every unit test and failed on the
+  first live run (`Could not find imported module support code` / `has no attribute
+  'require_common'`). They import `module_utils.version` (common >= 1.1.1, now the declared
+  dependency). A unit test fails any module_utils import that does not name a file.
+
 ## [1.1.0] — 2026-11-07
 
 ### Added
