@@ -83,19 +83,5 @@
       State: {{ _homepage_container_info.container.State.Status | default('(container not found)') }}
     quiet: true
 
-- name: Verify the Homepage HTTP endpoint answers (read-back, no secret in the request)
-  ansible.builtin.uri:
-    url: "http://localhost:{{ homepage_host_port }}/"
-    method: GET
-    status_code: [200]
-  register: _homepage_health
-  changed_when: false
-
-- name: HARD GATE — Homepage endpoint must answer 200
-  ansible.builtin.assert:
-    that:
-      - _homepage_health.status == 200
-    fail_msg: >-
-      Homepage did not answer 200 on http://localhost:{{ homepage_host_port }}/ after deploy —
-      got {{ _homepage_health.status | default('no response') }}.
-    quiet: true
+- name: Verify the Homepage HTTP endpoint answers
+  ansible.builtin.include_tasks: health.yml

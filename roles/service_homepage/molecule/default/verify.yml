@@ -51,4 +51,11 @@
           - r.bookmark is search('homepage_bookmarks_forbidden_href_pattern')
         fail_msg: "config validation verdicts wrong: {{ r }}"
 
+    - name: The HTTP check retries through resets, and still fails on a dead endpoint
+      ansible.builtin.assert:
+        that:
+          - r.flaky == 'passed'
+          - r.dead == 'gate'
+        fail_msg: "HTTP check verdicts wrong: flaky={{ r.flaky }} dead={{ r.dead }}"
+
     - ansible.builtin.file: { path: "{{ render_dir }}", state: absent }

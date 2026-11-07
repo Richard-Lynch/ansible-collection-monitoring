@@ -38,6 +38,16 @@ argument_specs:
           - Host port -> container's 3000, for a reverse proxy to front.
         type: int
         required: false
+      homepage_health_retries:
+        description:
+          - Retries of the post-deploy HTTP check. A just-restarted container resets its first connections, so one attempt can fail a healthy deploy.
+        type: int
+        required: false
+      homepage_health_delay:
+        description:
+          - Seconds between the post-deploy HTTP check's retries.
+        type: int
+        required: false
       homepage_puid:
         description:
           - Container PUID.

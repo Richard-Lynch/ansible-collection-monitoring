@@ -26,7 +26,10 @@ network with a host port for a reverse proxy to front.
 - Restarts the stack when the rendered config changes (bind-mounted config edits
   don't recreate the container).
 - **Read-back after deploy**: asserts the container is running and that
-  `http://localhost:<homepage_host_port>/` answers 200.
+  `http://localhost:<homepage_host_port>/` answers 200. A just-restarted
+  container resets its first connections, so the check retries
+  (`homepage_health_retries`, default 12, `homepage_health_delay` seconds apart,
+  default 5) and an assert after the loop fails the run if it never answers.
 
 ## Content is the caller's
 
@@ -83,7 +86,7 @@ See [`meta/argument_specs.yml`](meta/argument_specs.yml). Key ones:
 - `homepage_forbidden_href_patterns`,
   `homepage_bookmarks_forbidden_href_pattern`.
 - `homepage_image` (pinned, never `:latest`), `homepage_network`,
-  `homepage_host_port`,
+  `homepage_host_port`, `homepage_health_retries`/`homepage_health_delay`,
   `homepage_puid`/`homepage_pgid`/`homepage_umask`/`homepage_tz`.
 
 ## Usage
@@ -106,4 +109,6 @@ See [`meta/argument_specs.yml`](meta/argument_specs.yml). Key ones:
 role's real `validate.yml` in both directions: the default config and a good
 fixture pass, and a section/layout mismatch, a forbidden card link and a
 forbidden bookmark are each refused. A widget-guard check proves a set key
-renders its widget and an empty one omits it.
+renders its widget and an empty one omits it. The post-deploy HTTP check runs
+against a local endpoint that resets its first two connections (it must pass)
+and against one that never answers 200 (it must fail through its gate).
