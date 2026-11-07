@@ -10,6 +10,7 @@
 .python-version
 CHANGELOG.md
 LICENSE
+Makefile
 README.md
 ci/affected-scenarios.sh
 configured_roles.txt
@@ -24,6 +25,7 @@ plugins/module_utils/alertmanager/client.py
 plugins/modules/alertmanager_silence.py
 plugins/modules/alertmanager_silence_info.py
 renovate.json
+requirements.yml
 roles/apprise_notify_config/README.md
 roles/apprise_notify_config/defaults/SKIP
 roles/apprise_notify_config/defaults/main.yml
@@ -256,3 +258,4 @@ tests/sanity/ignore-2.20.txt
 tests/sanity/ignore-2.21.txt
 tests/unit/conftest.py
 tests/unit/plugins/modules/test_alertmanager_silence.py
+tests/unit/plugins/modules/test_module_utils_imports_are_files.py
