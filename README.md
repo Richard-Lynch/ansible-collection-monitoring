@@ -39,7 +39,7 @@ or pin it in `requirements.yml`:
 ```yaml
 collections:
   - name: richard_lynch.monitoring
-    version: "1.0.4"
+    version: "1.0.5"
 ```
 
 Requires ansible-core >=2.19.0.

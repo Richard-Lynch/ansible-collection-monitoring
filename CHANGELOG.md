@@ -9,6 +9,12 @@ All notable changes to this collection are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the collection
 uses [Semantic Versioning](https://semver.org/).
 
+## [1.0.5] — 2026-11-07
+
+### Fixed
+
+- `service_homepage` retries its post-deploy HTTP check: a container that has just been restarted resets its first connections, so a single attempt can fail the first converge of a healthy deploy. The check makes up to `homepage_health_retries` + 1 attempts (new option, default 12), `homepage_health_delay` seconds apart (new option, default 5), and an assert after the loop fails the run if the endpoint never answers 200.
+
 ## [1.0.4] — 2026-11-06
 
 ### Changed

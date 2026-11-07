@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 from ansible_devkit.argspec.models import ArgumentSpec, ArgumentSpecs, OptionSpec
+
 DEFAULT_AUTHOR = "Collection maintainers"
 
 argument_specs = ArgumentSpecs(
@@ -30,6 +31,19 @@ argument_specs = ArgumentSpecs(
                     type="int",
                     required=False,
                     description=["Host port -> container's 3000, for a reverse proxy to front."],
+                ),
+                "homepage_health_retries": OptionSpec(
+                    type="int",
+                    required=False,
+                    description=[
+                        "Retries of the post-deploy HTTP check. A just-restarted container resets"
+                        " its first connections, so one attempt can fail a healthy deploy.",
+                    ],
+                ),
+                "homepage_health_delay": OptionSpec(
+                    type="int",
+                    required=False,
+                    description=["Seconds between the post-deploy HTTP check's retries."],
                 ),
                 "homepage_puid": OptionSpec(
                     type="int", required=False, description=["Container PUID."]
