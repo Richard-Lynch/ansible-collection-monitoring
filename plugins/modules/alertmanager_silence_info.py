@@ -61,7 +61,7 @@ summary:
 """
 
 from ansible.module_utils.basic import AnsibleModule
-from ansible_collections.richard_lynch.common.plugins.module_utils import (
+from ansible_collections.richard_lynch.common.plugins.module_utils.version import (
     require_common,
 )
 from ansible_collections.richard_lynch.common.plugins.module_utils.args import (

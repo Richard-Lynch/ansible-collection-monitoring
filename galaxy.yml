@@ -4,7 +4,7 @@
 ---
 namespace: richard_lynch
 name: monitoring
-version: 1.1.0
+version: 1.1.1
 readme: README.md
 authors:
   - Richard Lynch
@@ -21,7 +21,7 @@ tags:
   - docker
 dependencies:
   community.docker: ">=4.0.0"
-  richard_lynch.common: ">=1.0.0,<2.0.0"
+  richard_lynch.common: ">=1.1.1,<2.0.0"
 repository: https://github.com/Richard-Lynch/ansible-collection-monitoring
 documentation: https://github.com/Richard-Lynch/ansible-collection-monitoring/blob/main/README.md
 homepage: https://github.com/Richard-Lynch/ansible-collection-monitoring
