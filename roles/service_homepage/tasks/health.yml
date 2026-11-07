@@ -1,0 +1,28 @@
+---
+# The post-deploy HTTP check. A container that has just been (re)started resets its first
+# connections while the server comes up, so a single attempt can fail the first converge of a
+# healthy deploy. It retries, a bounded number of times, and the gate after it decides: an
+# `until:` loop with failed_when: false ends GREEN when its retries run out (UNTIL-01), so the
+# assert is what fails a dead endpoint.
+- name: Verify the Homepage HTTP endpoint answers (read-back, no secret in the request)
+  ansible.builtin.uri:
+    url: "http://localhost:{{ homepage_host_port }}/"
+    method: GET
+    status_code: [200]
+  register: _homepage_health
+  until: (_homepage_health.status | default(-1) | int) == 200
+  retries: "{{ homepage_health_retries }}"
+  delay: "{{ homepage_health_delay }}"
+  failed_when: false
+  changed_when: false
+
+- name: HARD GATE — Homepage endpoint must answer 200
+  ansible.builtin.assert:
+    that:
+      - (_homepage_health.status | default(-1) | int) == 200
+    fail_msg: >-
+      Homepage did not answer 200 on http://localhost:{{ homepage_host_port }}/ after deploy
+      ({{ (homepage_health_retries | int) + 1 }} attempts, {{ homepage_health_delay }}s apart) —
+      got {{ 'no response' if (_homepage_health.status | default(-1) | int) < 0 else _homepage_health.status }}:
+      {{ _homepage_health.msg | default('') }}
+    quiet: true

@@ -102,6 +102,56 @@
         - ansible.builtin.set_fact:
             _results: "{{ _results | combine({'bookmark': ansible_failed_result.msg | default('')}) }}"
 
+    # The post-restart HTTP check (tasks/health.yml) against local endpoints that reset their first
+    # connections, as a just-restarted container does. A single attempt fails on the first; the
+    # check must retry through it, and must still FAIL (through its gate) on one that never answers
+    # 200. Both are the same fixture: `flaky` resets 2 connections, `dead` resets more than the
+    # check ever attempts.
+    - name: Clear the endpoints' port files from any earlier run
+      ansible.builtin.file: { path: "{{ render_dir }}/{{ item }}.port", state: absent }
+      loop: [flaky, dead]
+      changed_when: false  # test scaffolding: each converge starts its own endpoints
+    - name: Start the endpoints
+      ansible.builtin.command:
+        argv: ["{{ ansible_playbook_python }}", "{{ _fixtures }}/flaky_http.py", "{{ render_dir }}/{{ item.name }}.port", "{{ item.resets }}"]
+      loop: [{ name: flaky, resets: "2" }, { name: dead, resets: "99" }]
+      async: 90
+      poll: 0
+      register: _endpoints
+      changed_when: false
+    - name: Wait for the endpoints to listen (their port files, so no reset is spent on the wait)
+      ansible.builtin.wait_for: { path: "{{ render_dir }}/{{ item }}.port", timeout: 15 }
+      loop: [flaky, dead]
+    - ansible.builtin.slurp: { src: "{{ render_dir }}/{{ item }}.port" }
+      loop: [flaky, dead]
+      register: _ports
+
+    - name: CASE flaky — the HTTP check rides out connection resets
+      block:
+        - ansible.builtin.include_role: { name: service_homepage, tasks_from: health }
+          vars: { homepage_host_port: "{{ _ports.results[0].content | b64decode | int }}", homepage_health_retries: 5, homepage_health_delay: 1 }
+        - ansible.builtin.set_fact: { _results: "{{ _results | combine({'flaky': 'passed'}) }}" }
+      rescue:
+        - ansible.builtin.set_fact:
+            _results: "{{ _results | combine({'flaky': ansible_failed_result.msg | default('failed')}) }}"
+
+    - name: CASE dead — an endpoint that never answers 200 still fails, through the gate
+      block:
+        - ansible.builtin.include_role: { name: service_homepage, tasks_from: health }
+          vars: { homepage_host_port: "{{ _ports.results[1].content | b64decode | int }}", homepage_health_retries: 2, homepage_health_delay: 1 }
+        - ansible.builtin.set_fact: { _results: "{{ _results | combine({'dead': 'NOT REFUSED'}) }}" }
+      rescue:
+        - ansible.builtin.set_fact:
+            # Normalised: the gate's message names the endpoint's port, which differs per converge.
+            _results: >-
+              {{ _results | combine({'dead': 'gate' if (ansible_failed_result.msg | default('')) is search('Homepage did not answer 200')
+                                     else ansible_failed_result.msg | default('')}) }}
+
+    - name: Drop the endpoints' async job records (the dead one is still waiting; it exits on its own)
+      ansible.builtin.async_status: { jid: "{{ item.ansible_job_id }}", mode: cleanup }
+      loop: "{{ _endpoints.results }}"
+      changed_when: false
+
     - ansible.builtin.copy:
         content: "{{ _results | to_json }}"
         dest: "{{ render_dir }}/results.json"

@@ -164,6 +164,7 @@ roles/service_homepage/meta/argument_specs.py
 roles/service_homepage/meta/argument_specs.yml
 roles/service_homepage/meta/main.yml
 roles/service_homepage/molecule/default/converge.yml
+roles/service_homepage/molecule/default/fixtures/flaky_http.py
 roles/service_homepage/molecule/default/fixtures/good/bookmarks.yaml.j2
 roles/service_homepage/molecule/default/fixtures/good/services.yaml.j2
 roles/service_homepage/molecule/default/fixtures/good/settings.yaml.j2
@@ -172,6 +173,7 @@ roles/service_homepage/molecule/default/fixtures/mismatch/services.yaml.j2
 roles/service_homepage/molecule/default/fixtures/mismatch/settings.yaml.j2
 roles/service_homepage/molecule/default/molecule.yml
 roles/service_homepage/molecule/default/verify.yml
+roles/service_homepage/tasks/health.yml
 roles/service_homepage/tasks/main.yml
 roles/service_homepage/tasks/validate.yml
 roles/service_homepage/templates/config/bookmarks.yaml.j2

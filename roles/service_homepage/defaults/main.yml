@@ -9,6 +9,9 @@ homepage_config_dir: "/opt/homepage"
 # port, for a reverse proxy elsewhere to front it.
 homepage_network: monitoring
 homepage_host_port: 3010
+# The post-deploy HTTP check: up to 1 + retries attempts, `delay` seconds apart (one minute).
+homepage_health_retries: 12
+homepage_health_delay: 5
 
 # PUID/PGID/TZ for the container.
 homepage_puid: 1000
