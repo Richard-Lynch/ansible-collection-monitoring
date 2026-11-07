@@ -7,6 +7,16 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 Observability roles: Prometheus, Alertmanager, Loki, Grafana, Alloy, node_exporter, Uptime Kuma, Apprise and a Homepage dashboard as Docker Compose services; plus the cross-cutting roles that give any host or service its metrics, logs, alert rules, log alert rules, textfile exporters and notification targets.
 
+## Modules
+
+| Module | Description |
+| ------ | ----------- |
+| `alertmanager_silence` | One Alertmanager silence as desired state (identity = comment + matchers; honest `changed`, `--check`, `--diff`) |
+| `alertmanager_silence_info` | List Alertmanager silences, normalized, filtered by state and comment |
+
+Both take `richard_lynch.common`'s connection options (`url`, optional `token`, `validate_certs`,
+`ca_path`, `timeout`); the resource model is `docs/resources/alertmanager_silence.md`.
+
 ## Roles
 
 | Role | Description |

@@ -9,6 +9,28 @@ All notable changes to this collection are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the collection
 uses [Semantic Versioning](https://semver.org/).
 
+## [1.1.0] — 2026-11-07
+
+### Added
+
+- **`alertmanager_silence`** — one Alertmanager silence as desired state, found by its identity
+  (comment + normalized matcher set), never by its server-generated id. Honest `changed`,
+  `--check` and `--diff`; a refresh is ONE write (a POST carrying the existing id, which
+  Alertmanager handles as expire-and-replace); `state: absent` expires the silence and every
+  duplicate; a read-back that does not show the desired state is a failure, never a pass. Built on
+  `richard_lynch.common` (`DesiredState`, `FetchUrlTransport`, `http_argument_spec`), so the
+  connection options and the redaction are the shared ones. Replaces the `uri` loops that expired
+  and re-created silences on every run.
+- **`alertmanager_silence_info`** — list silences, filtered by state and comment substring,
+  normalized the same way.
+- `plugins/module_utils/alertmanager/client.py`: the pure-Python client and `SilenceResource`
+  (no Ansible imports; a script or a test drives it through `UrllibTransport`), and
+  `docs/resources/alertmanager_silence.md`, the resource model a provider in another language would
+  implement from.
+- Unit tests against a fake Alertmanager that enforces the v2 silences API (server-generated ids,
+  id-carrying POST = replace, state from the clock, DELETE = expire, Alertmanager's own 400s), with
+  the five defects of the `uri` approach pinned as cases, and a token-never-in-output case.
+
 ## [1.0.5] — 2026-11-07
 
 ### Fixed
